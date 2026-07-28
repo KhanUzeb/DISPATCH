@@ -1,0 +1,97 @@
+# Client profiles — use Dispatch as a *router*, not as a model provider.
+#
+# Mode:
+#   execute     — Dispatch calls its own providers (discovered Groq/OpenRouter free)
+#   passthrough — Dispatch classifies, picks a model from YOUR tool/upstream, forwards
+#
+# Models are NOT hardcoded. With discover_models: true, Dispatch fetches
+# GET {upstream}/models (or OpenRouter catalog) and auto-maps cheap/mid/hard.
+# Optional DISPATCH_MODEL_* env vars still override a tier.
+#
+# DISPATCH_PROFILE / DISPATCH_MODE env vars override active profile / mode.
+
+active_profile: demo
+
+profiles:
+  # Generic OpenAI-compatible tools (Codex, Cursor, Cline, …)
+  default:
+    mode: passthrough
+    protocol: openai
+    upstream_base_url: https://openrouter.ai/api/v1
+    upstream_api_key: ""
+    discover_models: true
+    free_only: false
+    models:
+      cheap: ""
+      mid: ""
+      hard: ""
+    fallbacks:
+      cheap: []
+      mid: []
+      hard: []
+
+  opencode:
+    mode: passthrough
+    protocol: openai
+    upstream_base_url: https://openrouter.ai/api/v1
+    upstream_api_key: ""
+    discover_models: true
+    free_only: false
+    models:
+      cheap: ""
+      mid: ""
+      hard: ""
+    fallbacks:
+      cheap: []
+      mid: []
+      hard: []
+
+  codex:
+    mode: passthrough
+    protocol: openai
+    upstream_base_url: https://api.openai.com/v1
+    upstream_api_key: ""
+    discover_models: true
+    free_only: false
+    models:
+      cheap: ""
+      mid: ""
+      hard: ""
+    fallbacks:
+      cheap: []
+      mid: []
+      hard: []
+
+  # Claude Code speaks Anthropic Messages API (/v1/messages).
+  claude-code:
+    mode: passthrough
+    protocol: anthropic
+    upstream_base_url: https://api.anthropic.com
+    upstream_api_key: ""
+    discover_models: true
+    free_only: false
+    models:
+      cheap: ""
+      mid: ""
+      hard: ""
+    fallbacks:
+      cheap: []
+      mid: []
+      hard: []
+
+  # Demo / portfolio: Dispatch executes via discovered Groq + OpenRouter free models.
+  demo:
+    mode: execute
+    protocol: openai
+    upstream_base_url: ""
+    upstream_api_key: ""
+    discover_models: true
+    free_only: true
+    models:
+      cheap: ""
+      mid: ""
+      hard: ""
+    fallbacks:
+      cheap: []
+      mid: []
+      hard: []

@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+.dispatch_metrics.jsonl
+.dispatch_metrics.tmp
+.vscode/settings.json

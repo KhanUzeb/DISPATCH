@@ -1,0 +1,122 @@
+# Model registry — discovery-driven (not a hardcoded ID list).
+#
+# At startup Dispatch fetches live catalogs from Groq + OpenRouter (demo)
+# or from the coding tool's upstream (passthrough), then auto-buckets into
+# cheap / mid / hard.
+#
+# Set DISPATCH_DISCOVER=false to force fallback_models only (offline/tests).
+
+source: discover  # discover | static
+
+discover:
+  cache_ttl_seconds: 3600
+  providers:
+    # Demo free-tier sources
+    - name: groq
+      provider: groq
+      base_url: https://api.groq.com/openai/v1
+      api_key_env: GROQ_API_KEY
+      free_only: true
+      enabled: true
+
+    - name: openrouter
+      provider: openrouter
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPENROUTER_API_KEY
+      free_only: true
+      prefer_suffix: ":free"
+      enabled: true
+
+  tiering:
+    strategy: size_then_hints
+    cheap_max_params_b: 20
+    mid_max_params_b: 80
+    max_per_tier: 4
+    prefer_free: true
+
+# Used when discovery is disabled, keys are missing, or the network fails.
+# Kept to Groq + OpenRouter free-tier IDs so local demos still work offline.
+fallback_models:
+  - key: groq-llama-3.1-8b-instant
+    provider_model_id: llama-3.1-8b-instant
+    provider: groq
+    tier: cheap
+    enabled: true
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    avg_latency_ms: 250
+    context_window: 128000
+    supports_tool_calling: true
+    supports_structured_output: true
+    capabilities: ["chat"]
+    metadata: {note: "fallback Groq free 8B"}
+
+  - key: groq-llama-3.3-70b-versatile
+    provider_model_id: llama-3.3-70b-versatile
+    provider: groq
+    tier: mid
+    enabled: true
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    avg_latency_ms: 450
+    context_window: 128000
+    supports_tool_calling: true
+    supports_structured_output: true
+    capabilities: ["chat", "json"]
+    metadata: {note: "fallback Groq free 70B"}
+
+  - key: groq-gpt-oss-120b
+    provider_model_id: openai/gpt-oss-120b
+    provider: groq
+    tier: hard
+    enabled: true
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    avg_latency_ms: 700
+    context_window: 131000
+    supports_tool_calling: true
+    supports_structured_output: true
+    capabilities: ["chat", "json", "tools"]
+    metadata: {note: "fallback Groq gpt-oss 120B"}
+
+  - key: openrouter-llama-3.2-3b-free
+    provider_model_id: meta-llama/llama-3.2-3b-instruct:free
+    provider: openrouter
+    tier: cheap
+    enabled: true
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    avg_latency_ms: 900
+    context_window: 131000
+    supports_tool_calling: false
+    supports_structured_output: true
+    capabilities: ["chat"]
+    metadata: {note: "fallback OpenRouter free small Llama"}
+
+  - key: openrouter-llama-3.3-70b-free
+    provider_model_id: meta-llama/llama-3.3-70b-instruct:free
+    provider: openrouter
+    tier: mid
+    enabled: true
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    avg_latency_ms: 1400
+    context_window: 131000
+    supports_tool_calling: true
+    supports_structured_output: true
+    capabilities: ["chat", "json"]
+    metadata: {note: "fallback OpenRouter free 70B"}
+
+  - key: openrouter-qwen3-coder-free
+    provider_model_id: qwen/qwen3-coder:free
+    provider: openrouter
+    tier: hard
+    enabled: true
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    avg_latency_ms: 1700
+    context_window: 262000
+    supports_tool_calling: true
+    supports_structured_output: true
+    capabilities: ["chat", "json", "tools", "code"]
+    metadata: {note: "fallback OpenRouter free coder"}

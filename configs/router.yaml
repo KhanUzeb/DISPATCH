@@ -1,0 +1,54 @@
+routes_path: configs/routes.yaml
+models_path: configs/models.yaml
+clients_path: configs/clients.yaml
+
+encoder:
+  model: sentence-transformers/all-MiniLM-L6-v2
+  device: null
+
+thresholds:
+  default: 0.45
+  top_k: 8
+  aggregation: max
+
+policy:
+  version: v2
+  diversify: true
+  max_fallbacks: 3
+
+provider:
+  timeouts_ms:
+    groq: 20000
+    openrouter: 12000
+    openai: 30000
+    anthropic: 30000
+    google: 30000
+    together: 30000
+    deepseek: 30000
+    fireworks: 30000
+    mistral: 30000
+    ollama: 60000
+    openai_compatible: 30000
+  retries:
+    groq: 1
+    openrouter: 0
+    openai: 1
+    anthropic: 1
+    google: 1
+    together: 1
+    deepseek: 1
+    fireworks: 1
+    mistral: 1
+    ollama: 0
+    openai_compatible: 1
+
+cache:
+  mode: memory
+  decision_ttl_seconds: 300
+
+telemetry:
+  mode: langfuse+logging
+
+request_limits:
+  max_prompt_chars: 50000
+  max_output_tokens: 1024

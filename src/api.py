@@ -1,0 +1,503 @@
+from __future__ import annotations
+
+import os
+import time
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field, field_validator
+
+from .anthropic_compat import register_anthropic_routes
+from .openai_compat import register_openai_routes
+from .router.classifier import Classifier
+from .router.clients import load_client_config
+from .router.config import ConfigError, load_config
+from .router.encoder import FakeEncoder, HuggingFaceEncoder
+from .router.executor import Executor
+from .router.index import InMemoryNumpyIndex
+from .router.models import load_model_registry
+from .router.providers.factory import build_provider_registry
+from .router.routes import load_route_store
+from .router.schemas import RoutingConstraints, Tier
+from .router.security import SlidingWindowRateLimiter, require_router_auth
+from .router.service import RoutingService
+from .router.telemetry import (
+    InMemoryTelemetry,
+    LangfuseTelemetry,
+    LoggingTelemetry,
+    MultiTelemetry,
+    NoopTelemetry,
+    RoutingTelemetryEvent,
+)
+
+
+class CompleteRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    max_cost_usd: float | None = Field(default=None, gt=0)
+    max_latency_ms: float | None = Field(default=None, gt=0)
+    min_context_window: int | None = Field(default=None, gt=0)
+    max_output_tokens: int = Field(default=512, gt=0)
+    expects_structured_output: bool = False
+    require_tool_calling: bool = False
+    include_diagnostics: bool = False
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must not be blank")
+        return v.strip()
+
+
+class ErrorResponse(BaseModel):
+    error_category: str
+    message: str
+
+
+service: RoutingService | None = None
+startup_error: str | None = None
+telemetry = NoopTelemetry()
+_metrics_path = Path(__file__).resolve().parents[1] / ".dispatch_metrics.jsonl"
+memory_telemetry = InMemoryTelemetry(max_events=1000, persist_path=_metrics_path)
+rate_limiter = SlidingWindowRateLimiter.from_env()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global service, startup_error, telemetry
+    try:
+        cfg = load_config()
+        route_store = load_route_store(cfg.routes_path, default_threshold=cfg.default_threshold)
+        model_registry = load_model_registry(cfg.models_path)
+        client_config = load_client_config(cfg.clients_path)
+        if os.environ.get("ROUTER_USE_FAKE_ENCODER", "").lower() == "true":
+            encoder = FakeEncoder()
+            print("[dispatch] encoder=fake (set ROUTER_USE_FAKE_ENCODER=false for real MiniLM routing)")
+        else:
+            try:
+                encoder = HuggingFaceEncoder(cfg.encoder_model, device=cfg.encoder_device)
+                encoder.warmup()
+                print(f"[dispatch] encoder={cfg.encoder_model}")
+            except Exception as exc:
+                print(f"[dispatch] real encoder unavailable ({exc}); falling back to FakeEncoder")
+                encoder = FakeEncoder()
+        index = InMemoryNumpyIndex()
+        classifier = Classifier(
+            route_store=route_store,
+            encoder=encoder,
+            index=index,
+            top_k=cfg.top_k,
+            aggregation=cfg.route_aggregation,
+        )
+        classifier.initialize()
+        providers = build_provider_registry(timeouts_ms=cfg.provider_timeouts_ms)
+        service = RoutingService(
+            classifier,
+            Executor(
+                providers,
+                max_fallbacks=cfg.max_fallbacks,
+                retries_by_provider=cfg.provider_retries,
+            ),
+            model_registry,
+            cfg,
+            client_config=client_config,
+        )
+        active = client_config.active()
+        tier_counts = {t.value: len(model_registry.get_by_tier(t)) for t in Tier}
+        print(
+            f"[dispatch] profile={active.name} mode={active.mode} protocol={active.protocol} "
+            f"models_source={model_registry.source} tiers={tier_counts}"
+            + (f" upstream={active.upstream_base_url}" if active.is_passthrough else "")
+        )
+        for spec in model_registry.enabled_models()[:12]:
+            print(f"[dispatch]   {spec.tier.value:5} {spec.provider.value:12} {spec.provider_model_id}")
+        if len(model_registry.enabled_models()) > 12:
+            print(f"[dispatch]   … +{len(model_registry.enabled_models()) - 12} more")
+
+
+        mode = (cfg.telemetry_mode or "noop").lower()
+        sinks: list = [memory_telemetry]
+        if mode == "logging":
+            sinks.append(LoggingTelemetry())
+        elif mode == "langfuse":
+            sinks.append(LangfuseTelemetry())
+        elif mode == "langfuse+logging":
+            sinks.append(LoggingTelemetry())
+            sinks.append(LangfuseTelemetry())
+        telemetry = MultiTelemetry(sinks=sinks)
+        startup_error = None
+    except ConfigError as exc:
+        startup_error = str(exc)
+        service = None
+        print(f"[dispatch] startup config error: {startup_error}")
+    except Exception as exc:
+        startup_error = f"startup failed: {exc}"
+        service = None
+        print(f"[dispatch] {startup_error}")
+    yield
+
+
+app = FastAPI(title="Dispatch", lifespan=lifespan)
+
+
+def _service_or_raise() -> RoutingService:
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorResponse(
+                error_category="service_unavailable",
+                message="service unavailable",
+            ).model_dump(),
+        )
+    return service
+
+
+def _validate_request_limits(svc: RoutingService, *, prompt: str, max_output_tokens: int) -> None:
+    if len(prompt) > svc.config.request_max_prompt_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(error_category="invalid_request", message="prompt exceeds limit").model_dump(),
+        )
+    if max_output_tokens > svc.config.request_max_output_tokens:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_category="invalid_request",
+                message="max_output_tokens exceeds limit",
+            ).model_dump(),
+        )
+
+
+def _emit_telemetry(event: RoutingTelemetryEvent) -> None:
+    try:
+        telemetry.emit(event)
+    except Exception:
+        return
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in {"/health", "/ready"}:
+        return await call_next(request)
+    client = request.client.host if request.client else "unknown"
+    if not rate_limiter.allow(client):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error_category": "rate_limited",
+                "message": "Too many requests. Set ROUTER_RATE_LIMIT_PER_MINUTE=0 to disable locally.",
+            },
+        )
+    return await call_next(request)
+
+
+app.include_router(register_openai_routes(get_service=_service_or_raise, emit_telemetry=_emit_telemetry))
+app.include_router(register_anthropic_routes(get_service=_service_or_raise, emit_telemetry=_emit_telemetry))
+
+
+@app.get("/health")
+def health():
+    profile = service.active_profile if service else None
+    return {
+        "status": "ok",
+        "profile": profile.name if profile else None,
+        "mode": profile.mode if profile else None,
+    }
+
+
+@app.get("/ready")
+def ready():
+    if service is None:
+        # Avoid leaking absolute filesystem paths to clients.
+        return {"ready": False, "error": "startup failed — check server logs"}
+    profile = service.active_profile
+    registry = service.model_registry
+    payload = {
+        "ready": True,
+        "models_source": registry.source,
+        "models_version": registry.version,
+        "models": [
+            {
+                "key": m.key,
+                "id": m.provider_model_id,
+                "provider": m.provider.value,
+                "tier": m.tier.value,
+            }
+            for m in registry.enabled_models()
+        ],
+    }
+    if profile is not None:
+        payload["profile"] = profile.name
+        payload["mode"] = profile.mode
+        payload["protocol"] = profile.protocol
+        if profile.is_passthrough:
+            try:
+                profile.ensure_models(api_key=profile.upstream_api_key or None)
+            except Exception as exc:
+                payload["discover_error"] = str(exc)
+            payload["tier_models"] = dict(profile.models)
+            payload["upstream"] = profile.upstream_base_url
+    return payload
+
+
+@app.post("/models/refresh")
+def refresh_models(_: None = Depends(require_router_auth)):
+    """Re-fetch live catalogs from Groq / OpenRouter / configured sources."""
+    svc = _service_or_raise()
+    refreshed = svc.model_registry.refresh()
+    svc.model_registry = refreshed
+    return {
+        "ok": True,
+        "source": refreshed.source,
+        "version": refreshed.version,
+        "count": len(refreshed.enabled_models()),
+        "tiers": {
+            "cheap": [m.provider_model_id for m in refreshed.get_by_tier(Tier.CHEAP)],
+            "mid": [m.provider_model_id for m in refreshed.get_by_tier(Tier.MID)],
+            "hard": [m.provider_model_id for m in refreshed.get_by_tier(Tier.HARD)],
+        },
+    }
+
+
+@app.get("/dashboard")
+def dashboard(_: None = Depends(require_router_auth)):
+    html_path = Path(__file__).resolve().parent / "dashboard.html"
+    return FileResponse(str(html_path), media_type="text/html")
+
+
+@app.get("/metrics/recent")
+def metrics_recent(limit: int = 100, _: None = Depends(require_router_auth)):
+    return {"events": memory_telemetry.recent(limit=max(1, min(limit, 500)))}
+
+
+@app.post("/route")
+def route_only(req: CompleteRequest, _: None = Depends(require_router_auth)):
+    svc = _service_or_raise()
+    _validate_request_limits(svc, prompt=req.prompt, max_output_tokens=req.max_output_tokens)
+    profile = svc.active_profile
+    started = time.perf_counter()
+
+    # Passthrough profiles: return the client's mapped model (no Dispatch provider pick).
+    if profile is not None and profile.is_passthrough:
+        decision = svc.decide_for_client(
+            req.prompt,
+            expects_structured_output=req.expects_structured_output,
+            profile=profile,
+        )
+        total_latency = (time.perf_counter() - started) * 1000.0
+        _emit_telemetry(
+            RoutingTelemetryEvent(
+                request_id=decision.request_id,
+                route=decision.classification.route,
+                selected_model=decision.selected_model,
+                selected_provider=f"passthrough:{profile.name}",
+                tier=decision.tier.value,
+                cache_hit=decision.cache_hit,
+                classification_latency_ms=decision.classification_latency_ms,
+                policy_latency_ms=0.0,
+                provider_latency_ms=0.0,
+                total_latency_ms=total_latency,
+                estimated_cost_usd=None,
+                actual_cost_usd=None,
+                input_tokens=max(1, len(req.prompt) // 4),
+                output_tokens=0,
+                fallback_attempts=0,
+                error_category=None,
+                route_confidence=decision.classification.similarity_score,
+                config_versions={
+                    "policy_version": f"client-{profile.name}",
+                    "route_version": decision.classification.route_config_version,
+                    "classifier_version": decision.classification.classifier_version,
+                },
+                decision=None,
+            )
+        )
+        payload = {
+            "request_id": decision.request_id,
+            "mode": "passthrough",
+            "profile": profile.name,
+            "model_key": decision.selected_model,
+            "provider_model_id": decision.selected_model,
+            "provider": f"passthrough:{profile.name}",
+            "tier": decision.tier.value,
+            "reason": decision.reason,
+            "cache_hit": decision.cache_hit,
+            "classification_confidence": decision.classification.similarity_score,
+            "tier_models": dict(profile.models),
+        }
+        if req.include_diagnostics:
+            payload["classification"] = asdict(decision.classification)
+        return payload
+
+    constraints = RoutingConstraints(
+        max_cost_usd=req.max_cost_usd,
+        max_latency_ms=req.max_latency_ms,
+        min_context_window=req.min_context_window,
+        require_structured_output=req.expects_structured_output,
+        require_tool_calling=req.require_tool_calling,
+    )
+    route_result = svc.decide(req.prompt, constraints, expects_structured_output=req.expects_structured_output)
+    decision = route_result.decision
+    selected = decision.selected_model
+    total_latency = (time.perf_counter() - started) * 1000.0
+    _emit_telemetry(
+        RoutingTelemetryEvent(
+            request_id=route_result.request_id,
+            route=decision.classification.route,
+            selected_model=selected.key if selected else None,
+            selected_provider=selected.provider.value if selected else None,
+            tier=decision.classification.tier.value,
+            cache_hit=route_result.cache_hit,
+            classification_latency_ms=route_result.classification_latency_ms,
+            policy_latency_ms=route_result.policy_latency_ms,
+            provider_latency_ms=0.0,
+            total_latency_ms=total_latency,
+            estimated_cost_usd=next(
+                (c.estimated_cost_usd for c in decision.candidates if selected and c.model.key == selected.key),
+                None,
+            ),
+            actual_cost_usd=None,
+            input_tokens=max(1, len(req.prompt) // 4),
+            output_tokens=0,
+            fallback_attempts=0,
+            error_category=decision.error_category.value if decision.error_category else None,
+            route_confidence=decision.classification.similarity_score,
+            config_versions={
+                "policy_version": decision.policy_version,
+                "route_version": decision.classification.route_config_version,
+                "classifier_version": decision.classification.classifier_version,
+            },
+            decision=decision,
+        )
+    )
+    payload = {
+        "request_id": route_result.request_id,
+        "mode": "execute",
+        "model_key": selected.key if selected else None,
+        "provider_model_id": selected.provider_model_id if selected else None,
+        "provider": selected.provider.value if selected else None,
+        "tier": decision.classification.tier.value,
+        "reason": decision.reason,
+        "cache_hit": route_result.cache_hit,
+        "classification_confidence": decision.classification.similarity_score,
+    }
+    if req.include_diagnostics:
+        payload["classification"] = asdict(decision.classification)
+        payload["candidates"] = [asdict(c) for c in decision.candidates]
+    return payload
+
+
+@app.post("/complete")
+def complete(req: CompleteRequest, _: None = Depends(require_router_auth)):
+    svc = _service_or_raise()
+    _validate_request_limits(svc, prompt=req.prompt, max_output_tokens=req.max_output_tokens)
+    constraints = RoutingConstraints(
+        max_cost_usd=req.max_cost_usd,
+        max_latency_ms=req.max_latency_ms,
+        min_context_window=req.min_context_window,
+        require_structured_output=req.expects_structured_output,
+        require_tool_calling=req.require_tool_calling,
+    )
+    started = time.perf_counter()
+    route_result, execution = svc.complete(
+        req.prompt,
+        constraints,
+        max_output_tokens=req.max_output_tokens,
+        expects_structured_output=req.expects_structured_output,
+    )
+    total_latency = (time.perf_counter() - started) * 1000.0
+    decision = route_result.decision
+    selected = execution.used_model or decision.selected_model
+
+    if execution.error is not None:
+        _emit_telemetry(
+            RoutingTelemetryEvent(
+                request_id=route_result.request_id,
+                route=decision.classification.route,
+                selected_model=selected.key if selected else None,
+                selected_provider=selected.provider.value if selected else None,
+                tier=decision.classification.tier.value,
+                cache_hit=route_result.cache_hit,
+                classification_latency_ms=route_result.classification_latency_ms,
+                policy_latency_ms=route_result.policy_latency_ms,
+                provider_latency_ms=0.0,
+                total_latency_ms=total_latency,
+                estimated_cost_usd=None,
+                actual_cost_usd=None,
+                input_tokens=max(1, len(req.prompt) // 4),
+                output_tokens=0,
+                fallback_attempts=len(execution.fallback_attempts),
+                error_category=execution.error.category.value,
+                route_confidence=decision.classification.similarity_score,
+                config_versions={
+                    "policy_version": decision.policy_version,
+                    "route_version": decision.classification.route_config_version,
+                    "classifier_version": decision.classification.classifier_version,
+                },
+                decision=decision,
+            )
+        )
+        status = 422 if execution.error.category.value == "no_feasible_model" else 502
+        raise HTTPException(
+            status_code=status,
+            detail=ErrorResponse(
+                error_category=execution.error.category.value,
+                message=execution.error.message,
+            ).model_dump(),
+        )
+    response = execution.response
+    if response is None:
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(error_category="internal_error", message="missing provider response").model_dump(),
+        )
+    estimated = next(
+        (c.estimated_cost_usd for c in decision.candidates if selected and c.model.key == selected.key),
+        None,
+    )
+    _emit_telemetry(
+        RoutingTelemetryEvent(
+            request_id=route_result.request_id,
+            route=decision.classification.route,
+            selected_model=selected.key if selected else None,
+            selected_provider=response.provider.value,
+            tier=decision.classification.tier.value,
+            cache_hit=route_result.cache_hit,
+            classification_latency_ms=route_result.classification_latency_ms,
+            policy_latency_ms=route_result.policy_latency_ms,
+            provider_latency_ms=response.latency_ms,
+            total_latency_ms=total_latency,
+            estimated_cost_usd=estimated,
+            actual_cost_usd=execution.actual_cost_usd,
+            input_tokens=response.usage_input_tokens,
+            output_tokens=response.usage_output_tokens,
+            fallback_attempts=len(execution.fallback_attempts),
+            error_category=None,
+            route_confidence=decision.classification.similarity_score,
+            config_versions={
+                "policy_version": decision.policy_version,
+                "route_version": decision.classification.route_config_version,
+                "classifier_version": decision.classification.classifier_version,
+            },
+            decision=decision,
+        )
+    )
+    return {
+        "request_id": route_result.request_id,
+        "response": response.text,
+        "model_key": selected.key if selected else None,
+        "provider_model_id": response.model,
+        "provider": response.provider.value,
+        "tier": decision.classification.tier.value,
+        "usage": {
+            "input_tokens": response.usage_input_tokens,
+            "output_tokens": response.usage_output_tokens,
+        },
+        "fallback_attempts": execution.fallback_attempts,
+        "cost": {"estimated": estimated, "actual": execution.actual_cost_usd},
+        "latency_ms": response.latency_ms,
+    }

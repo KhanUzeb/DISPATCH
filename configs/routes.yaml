@@ -1,0 +1,94 @@
+# Semantic routes — classifier matches prompts to these exemplars.
+# No hand-written regex. Soft keyword overlap is auto-derived from these
+# utterances at load time. Add paraphrases from real traffic to improve recall.
+
+tiers:
+  cheap:
+    - "summarize this in one sentence"
+    - "summarize this text briefly"
+    - "give me a one sentence summary"
+    - "Summarize this in one sentence: Dispatch routes LLM requests to the right model"
+    - "summarize the following paragraph in one sentence"
+    - "tl;dr this article for me"
+    - "short summary please"
+    - "condense this paragraph"
+    - "translate this sentence to spanish"
+    - "translate hello to spanish"
+    - "translate good morning to spanish"
+    - "Translate \"good morning\" to Spanish"
+    - "translate this word to french"
+    - "what does this mean in english"
+    - "extract the email addresses from this text"
+    - "pull out the phone numbers"
+    - "classify this message as spam or not spam"
+    - "is this positive or negative sentiment"
+    - "give me a yes or no answer"
+    - "what is the capital of france"
+    - "simple fact question"
+    - "rewrite this sentence more simply"
+    - "fix a typo in this sentence"
+    - "list the key points in three bullets"
+    - "format this as a bullet list"
+    - "say hi in one short sentence"
+    - "reply with a short greeting"
+
+  mid:
+    - "explain how this function works"
+    - "explain this code step by step"
+    - "explain the tradeoffs between REST and gRPC"
+    - "explain the tradeoffs between REST and gRPC for an internal microservice API"
+    - "compare REST and gRPC for microservices"
+    - "explain the tradeoffs between these two technologies"
+    - "compare these two options briefly"
+    - "write a short blog post about this topic"
+    - "draft a short article"
+    - "generate five variations of this headline"
+    - "answer this question using the provided context"
+    - "convert this data into a table"
+    - "write unit tests for this function"
+    - "write a short python function that merges two sorted lists"
+    - "write a python helper to merge sorted arrays"
+    - "implement a small utility function"
+    - "describe the steps to solve this problem"
+    - "walk me through the solution"
+    - "improve the clarity of this paragraph"
+    - "draft a professional email response"
+    - "refactor this function for readability"
+    - "add comments to this code"
+
+  hard:
+    - "design a distributed system for this use case"
+    - "design a distributed system for multi-region chat with failover"
+    - "Design a multi-region chat system with failover, consistency, and cost controls"
+    - "design a fault-tolerant job queue with idempotent consumers and dead-letter handling"
+    - "architect a reliable background job processing system"
+    - "analyze the tradeoffs between these three distributed architectures"
+    - "design a system and analyze deep architectural tradeoffs"
+    - "prove this mathematical statement step by step"
+    - "refactor this codebase for better performance"
+    - "debug this multi-threaded race condition"
+    - "compare and contrast these two algorithms in depth"
+    - "plan a multi-step agentic workflow for this task"
+    - "propose a highly available multi-region architecture with failover"
+    - "design an eventually consistent data model with conflict resolution"
+    - "optimize this system for p99 latency under high concurrency"
+    - "security review this authentication flow for privilege escalation risks"
+
+thresholds:
+  # Tuned for MiniLM-style embeddings. Hard needs a clearer match so simple
+  # prompts with technical nouns do not silently upgrade.
+  cheap: 0.34
+  mid: 0.36
+  hard: 0.42
+
+# Soft scoring knobs (no regex lists). Keyword overlap is mined from exemplars.
+scoring:
+  accept_floor: 0.34
+  margin: 0.05
+  # When top scores are this close, prefer the cheaper tier.
+  ambiguity_band: 0.08
+  # Weight for auto keyword overlap vs pure embedding similarity.
+  overlap_weight: 0.22
+  overlap_cap: 0.25
+  # Blend utterance-max similarity with tier centroid similarity.
+  centroid_weight: 0.25

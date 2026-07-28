@@ -1,0 +1,12 @@
+# Prefer: uv pip install -e ".[dev,dashboard]"
+# This file mirrors pyproject.toml for environments that expect requirements.txt.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
+python-dotenv>=1.0.1
+pyyaml>=6.0.1
+numpy>=1.26.0
+requests>=2.32.0
+groq>=0.9.0
+pytest>=8.0.0
+httpx>=0.27.0
