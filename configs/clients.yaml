@@ -13,7 +13,7 @@
 active_profile: demo
 
 profiles:
-  # Generic OpenAI-compatible tools (Codex, Cursor, Cline, …)
+  # Generic OpenAI-compatible passthrough profile.
   default:
     mode: passthrough
     protocol: openai
@@ -21,48 +21,10 @@ profiles:
     upstream_api_key: ""
     discover_models: true
     free_only: false
-    models:
-      cheap: ""
-      mid: ""
-      hard: ""
-    fallbacks:
-      cheap: []
-      mid: []
-      hard: []
+    models: {cheap: "", mid: "", hard: ""}
+    fallbacks: {cheap: [], mid: [], hard: []}
 
-  opencode:
-    mode: passthrough
-    protocol: openai
-    upstream_base_url: https://openrouter.ai/api/v1
-    upstream_api_key: ""
-    discover_models: true
-    free_only: false
-    models:
-      cheap: ""
-      mid: ""
-      hard: ""
-    fallbacks:
-      cheap: []
-      mid: []
-      hard: []
-
-  codex:
-    mode: passthrough
-    protocol: openai
-    upstream_base_url: https://api.openai.com/v1
-    upstream_api_key: ""
-    discover_models: true
-    free_only: false
-    models:
-      cheap: ""
-      mid: ""
-      hard: ""
-    fallbacks:
-      cheap: []
-      mid: []
-      hard: []
-
-  # Claude Code speaks Anthropic Messages API (/v1/messages).
+  # Anthropic passthrough profile for /v1/messages.
   claude-code:
     mode: passthrough
     protocol: anthropic
@@ -70,16 +32,10 @@ profiles:
     upstream_api_key: ""
     discover_models: true
     free_only: false
-    models:
-      cheap: ""
-      mid: ""
-      hard: ""
-    fallbacks:
-      cheap: []
-      mid: []
-      hard: []
+    models: {cheap: "", mid: "", hard: ""}
+    fallbacks: {cheap: [], mid: [], hard: []}
 
-  # Demo / portfolio: Dispatch executes via discovered Groq + OpenRouter free models.
+  # Local execute mode: Dispatch runs discovered free-tier models itself.
   demo:
     mode: execute
     protocol: openai
@@ -87,11 +43,5 @@ profiles:
     upstream_api_key: ""
     discover_models: true
     free_only: true
-    models:
-      cheap: ""
-      mid: ""
-      hard: ""
-    fallbacks:
-      cheap: []
-      mid: []
-      hard: []
+    models: {cheap: "", mid: "", hard: ""}
+    fallbacks: {cheap: [], mid: [], hard: []}

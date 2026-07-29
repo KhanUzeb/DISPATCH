@@ -7,6 +7,7 @@ configs/routes.yaml. Unmatched prompts fall back to mid.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -25,6 +26,19 @@ def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
     return float(sum(x * y for x, y in zip(a, b)))
+
+
+def _blend_embeddings(a: list[float], b: list[float]) -> list[float]:
+    """Average two unit vectors and re-normalize (identity when equal)."""
+    if not a:
+        return list(b)
+    if not b or a is b or a == b:
+        return list(a)
+    if len(a) != len(b):
+        return list(a)
+    mixed = [x + y for x, y in zip(a, b)]
+    norm = math.sqrt(sum(v * v for v in mixed)) or 1.0
+    return [v / norm for v in mixed]
 
 
 @dataclass
@@ -101,17 +115,36 @@ class Classifier:
         if not normalized:
             return self._fallback("blank prompt")
         query_text = self._classification_text(normalized)
+        tail_text = normalized[-220:] if len(normalized) > 220 else normalized
         try:
-            query_embedding = self.encoder.encode_queries([query_text])[0]
-            hits = self.index.query(query_embedding, self.top_k)
-        except (EncoderError, ValueError):
+            # Blend intent from both the instruction head and the trailing tail.
+            # Long prompts often place the actual ask near the end.
+            if query_text == tail_text:
+                embeddings = self.encoder.encode_queries([query_text])
+                if not embeddings:
+                    raise EncoderError("encoder returned no embeddings")
+                query_embedding = embeddings[0]
+                tail_embedding = query_embedding
+                hits = self.index.query(query_embedding, self.top_k)
+                tail_hits: list = []
+            else:
+                embeddings = self.encoder.encode_queries([query_text, tail_text])
+                if len(embeddings) < 2:
+                    raise EncoderError("encoder returned incomplete batch")
+                query_embedding = embeddings[0]
+                tail_embedding = embeddings[1]
+                hits = self.index.query(query_embedding, self.top_k)
+                tail_hits = self.index.query(tail_embedding, self.top_k)
+        except (EncoderError, ValueError, IndexError, TypeError):
             return self._fallback("encoder/index error")
 
-        if not hits:
+        if not hits and not tail_hits:
             return self._fallback("no route matches")
 
         grouped: dict[str, list[float]] = defaultdict(list)
         for hit in hits:
+            grouped[hit.route_name].append(hit.similarity_score)
+        for hit in tail_hits:
             grouped[hit.route_name].append(hit.similarity_score)
 
         semantic_scores: dict[str, float] = {}
@@ -123,17 +156,19 @@ class Classifier:
 
         scoring = self.route_store.scoring
         # Blend in tier centroid similarity (more stable than a single utterance).
+        # Use head+tail blend so long prompts with trailing asks stay stable.
+        centroid_query = _blend_embeddings(query_embedding, tail_embedding)
         centroid_weight = max(0.0, min(1.0, scoring.centroid_weight))
         for route in self.route_store.routes:
             centroid = self._centroids.get(route.name)
             if centroid is None:
                 continue
-            c_sim = _cosine(query_embedding, centroid)
+            c_sim = _cosine(centroid_query, centroid)
             base = semantic_scores.get(route.name, 0.0)
             semantic_scores[route.name] = (1.0 - centroid_weight) * base + centroid_weight * c_sim
 
         # Soft exemplar-keyword overlap (auto-mined — not regex lists).
-        overlap = self.route_store.overlap_scores(query_text)
+        overlap = self.route_store.overlap_scores(normalized)
         route_scores: dict[str, float] = {}
         for route in self.route_store.routes:
             base = semantic_scores.get(route.name, 0.0)
@@ -147,9 +182,10 @@ class Classifier:
         best_score = ranked[0][1]
         second_score = ranked[1][1] if len(ranked) > 1 else 0.0
         ambiguity_band = max(0.0, float(scoring.ambiguity_band))
+        ambiguity_max_score = max(0.0, float(scoring.ambiguity_max_score))
         near = [(name, score) for name, score in ranked if best_score - score <= ambiguity_band]
         # Ambiguous matches → cheaper tier (demo-friendly, cost-aware).
-        if len(near) > 1:
+        if len(near) > 1 and best_score <= ambiguity_max_score:
             near_sorted = sorted(
                 near,
                 key=lambda item: (

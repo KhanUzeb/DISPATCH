@@ -36,7 +36,15 @@ class InMemoryNumpyIndex(SemanticIndex):
         for route in routes:
             for utterance in route.utterances:
                 rows.append((route.name, utterance))
-        matrix = np.array(embeddings, dtype=np.float32)
+        if not rows:
+            self._vectors = np.zeros((0, 1), dtype=np.float32)
+            self._rows = []
+            return
+        matrix = np.asarray(embeddings, dtype=np.float32)
+        if matrix.ndim == 1:
+            matrix = matrix.reshape(1, -1)
+        if matrix.ndim != 2:
+            raise ValueError("Embeddings must be a 2D matrix")
         if len(rows) != len(matrix):
             raise ValueError("Number of route utterances and embeddings must match")
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
@@ -45,15 +53,20 @@ class InMemoryNumpyIndex(SemanticIndex):
         self._rows = rows
 
     def query(self, query_embedding: Sequence[float], top_k: int) -> list[IndexHit]:
-        if self._vectors is None:
+        if self._vectors is None or len(self._rows) == 0:
             return []
         query_vec = np.array(query_embedding, dtype=np.float32)
+        if query_vec.ndim != 1 or query_vec.size == 0:
+            return []
+        if self._vectors.shape[1] != query_vec.shape[0]:
+            return []
         query_norm = np.linalg.norm(query_vec)
         if query_norm == 0:
             return []
         normalized_query = query_vec / query_norm
         scores = self._vectors @ normalized_query
-        top_indices = np.argsort(scores)[::-1][: max(1, top_k)]
+        k = max(1, min(int(top_k), len(scores)))
+        top_indices = np.argsort(scores)[::-1][:k]
         return [
             IndexHit(
                 route_name=self._rows[i][0],

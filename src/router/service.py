@@ -79,7 +79,7 @@ class RoutingService:
         )
 
         cached = self.decision_cache.get(key)
-        if cached is not None:
+        if isinstance(cached, RoutingDecision):
             return RouteResponse(
                 request_id=request_id,
                 decision=cached,
@@ -173,7 +173,7 @@ class RoutingService:
             classification_latency_ms=classification_latency_ms,
             reason=reason,
         )
-        self.decision_cache.set(cache_key, decision)  # type: ignore[arg-type]
+        self.decision_cache.set(cache_key, decision)
         return decision
 
     def complete(

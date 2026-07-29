@@ -21,9 +21,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .router.prompting import build_routing_prompt
 from .router.passthrough import (
     dispatch_headers,
     forward_anthropic_messages,
+    has_upstream_credentials,
     resolve_auth_headers,
 )
 from .router.security import require_router_auth, router_api_key, router_api_key_configured
@@ -78,21 +80,18 @@ def _content_text(content: Any) -> str:
 
 
 def anthropic_messages_to_prompt(req: MessagesRequest, *, max_chars: int = 4000) -> str:
-    parts: list[str] = []
+    normalized: list[tuple[str, str]] = []
     if req.system:
         sys_text = _content_text(req.system).strip()
         if sys_text:
-            parts.append(f"system: {sys_text}")
+            normalized.append(("system", sys_text))
     for message in req.messages:
         text = _content_text(message.content).strip()
         if not text:
             continue
         role = message.role if message.role in {"user", "assistant"} else "user"
-        parts.append(f"{role}: {text}")
-    joined = "\n".join(parts).strip()
-    if not joined:
-        return ""
-    return joined if len(joined) <= max_chars else joined[-max_chars:]
+        normalized.append((role, text))
+    return build_routing_prompt(normalized, max_chars=max_chars)
 
 
 def anthropic_error(message: str, *, err_type: str = "invalid_request_error", status: int = 400):
@@ -117,6 +116,8 @@ def register_anthropic_routes(*, get_service, emit_telemetry) -> APIRouter:
             return anthropic_error("messages must contain non-empty content")
         if len(prompt) > svc.config.request_max_prompt_chars:
             return anthropic_error("prompt exceeds configured limit")
+        if req.max_tokens <= 0:
+            return anthropic_error("max_tokens must be > 0")
         if req.max_tokens > svc.config.request_max_output_tokens:
             return anthropic_error("max_tokens exceeds configured limit")
 
@@ -182,6 +183,14 @@ def register_anthropic_routes(*, get_service, emit_telemetry) -> APIRouter:
             if value:
                 auth[header_name] = value
         auth.setdefault("anthropic-version", "2023-06-01")
+
+        if not has_upstream_credentials(auth, protocol="anthropic"):
+            return anthropic_error(
+                "Passthrough needs an Anthropic upstream key (x-api-key, Authorization, "
+                "or DISPATCH_UPSTREAM_API_KEY).",
+                err_type="authentication_error",
+                status=401,
+            )
 
         payload = req.model_dump(exclude_none=True)
         try:

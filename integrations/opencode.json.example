@@ -1,18 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "dispatch/dispatch",
   "provider": {
     "dispatch": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Dispatch Router",
       "options": {
-        "baseURL": "http://localhost:8000/v1"
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "apiKey": "{env:ROUTER_API_KEY}"
       },
       "models": {
         "dispatch": {
-          "name": "Dispatch (auto-route)"
+          "name": "Dispatch (auto-route → your models)"
         }
       }
     }
-  },
-  "model": "dispatch/dispatch"
+  }
 }

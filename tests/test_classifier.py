@@ -84,3 +84,39 @@ def test_structured_output_policy_signal_bumps_cheap():
     classifier = _build_classifier()
     result = classifier.classify("summarize this in one sentence", expects_structured_output=True)
     assert result.tier in {Tier.MID, Tier.HARD}
+
+
+def test_classifier_uses_tail_intent_in_long_prompt():
+    classifier = _build_classifier()
+    prompt = (
+        "Context: "
+        + ("This paragraph provides extra background information. " * 30)
+        + "Now do the task: summarize this in one sentence."
+    )
+    result = classifier.classify(prompt)
+    assert result.tier == Tier.CHEAP
+    assert result.passed_threshold is True
+
+
+def test_classifier_high_confidence_does_not_force_cheap_on_ambiguity():
+    classifier = _build_classifier()
+    result = classifier.classify(
+        "Design a multi-region chat system with failover, consistency, and cost controls"
+    )
+    assert result.tier == Tier.HARD
+
+
+def test_classifier_encoder_batch_failure_falls_back_to_mid():
+    classifier = _build_classifier()
+
+    class BrokenEncoder:
+        identity = "broken:1"
+
+        def encode_queries(self, texts):
+            return []  # incomplete / empty batch
+
+    classifier.encoder = BrokenEncoder()  # type: ignore[assignment]
+    result = classifier.classify("summarize this in one sentence")
+    assert result.tier == Tier.MID
+    assert result.passed_threshold is False
+    assert result.fallback_reason == "encoder/index error"

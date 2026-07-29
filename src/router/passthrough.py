@@ -82,6 +82,18 @@ def resolve_auth_headers(
     return headers
 
 
+def has_upstream_credentials(auth_headers: dict[str, str], *, protocol: str) -> bool:
+    """True when headers contain a usable upstream credential (not just metadata)."""
+    if (auth_headers.get("x-api-key") or "").strip():
+        return True
+    auth = (auth_headers.get("Authorization") or "").strip()
+    if not auth:
+        return False
+    if protocol == "anthropic":
+        return True
+    return auth.lower().startswith("bearer ") and len(auth) > len("Bearer ")
+
+
 def forward_openai_chat(
     *,
     profile: ClientProfile,

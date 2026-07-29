@@ -148,11 +148,17 @@ def test_anthropic_prompt_includes_system():
     req = MessagesRequest(
         model="dispatch",
         system="You are helpful",
-        messages=[AnthropicMessage(role="user", content="hi")],
+        messages=[
+            AnthropicMessage(role="user", content="earlier"),
+            AnthropicMessage(role="assistant", content="response"),
+            AnthropicMessage(role="user", content="hi"),
+        ],
     )
     prompt = anthropic_messages_to_prompt(req)
     assert "system: You are helpful" in prompt
     assert "user: hi" in prompt
+    assert "earlier" not in prompt
+    assert "response" not in prompt
 
 
 def test_project_clients_yaml_loads(monkeypatch):
@@ -164,10 +170,10 @@ def test_project_clients_yaml_loads(monkeypatch):
     root = Path(__file__).resolve().parents[1]
     cfg = load_client_config(root / "configs" / "clients.yaml")
     assert "demo" in cfg.profiles
-    assert "opencode" in cfg.profiles
+    assert "default" in cfg.profiles
     assert "claude-code" in cfg.profiles
     assert cfg.profiles["claude-code"].protocol == "anthropic"
-    assert cfg.profiles["opencode"].is_passthrough
-    assert cfg.profiles["opencode"].discover_models is True
+    assert cfg.profiles["default"].is_passthrough
+    assert cfg.profiles["default"].discover_models is True
     assert cfg.active_profile == "demo"
     assert cfg.active().mode == "execute"

@@ -87,6 +87,8 @@ scoring:
   margin: 0.05
   # When top scores are this close, prefer the cheaper tier.
   ambiguity_band: 0.08
+  # Guardrail: if confidence is already high, keep the top-scoring tier.
+  ambiguity_max_score: 0.58
   # Weight for auto keyword overlap vs pure embedding similarity.
   overlap_weight: 0.22
   overlap_cap: 0.25

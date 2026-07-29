@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dispatch</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #14212b;
+      --ink-soft: #3d4f5c;
+      --muted: #6b7c89;
+      --paper: #f3f6f4;
+      --panel: rgba(255, 255, 255, 0.72);
+      --line: rgba(20, 33, 43, 0.1);
+      --accent: #1f6f5b;
+      --accent-deep: #145246;
+      --cheap: #2a7a4b;
+      --mid: #b06a16;
+      --hard: #9b3a3a;
+      --shadow: 0 18px 50px rgba(20, 33, 43, 0.08);
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Sora", sans-serif;
+      background:
+        radial-gradient(1200px 700px at 12% -10%, #d7ebe3 0%, transparent 55%),
+        radial-gradient(900px 600px at 100% 0%, #dfe7f2 0%, transparent 50%),
+        linear-gradient(165deg, #eef3f0 0%, #f7f5f1 48%, #e8eef4 100%);
+      background-attachment: fixed;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.35;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      max-width: 820px;
+      margin: 0 auto;
+      min-height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 28px 18px 18px;
+      gap: 14px;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      animation: rise 520ms ease both;
+    }
+
+    .brand {
+      font-family: "Instrument Serif", serif;
+      font-size: clamp(2.4rem, 5vw, 3.4rem);
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+      margin: 0;
+    }
+
+    .brand em {
+      font-style: italic;
+      color: var(--accent-deep);
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      padding-bottom: 6px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #b8c2c8;
+      box-shadow: 0 0 0 3px rgba(184, 194, 200, 0.25);
+    }
+    .dot.ok { background: var(--accent); box-shadow: 0 0 0 3px rgba(31, 111, 91, 0.18); }
+    .dot.bad { background: var(--hard); box-shadow: 0 0 0 3px rgba(155, 58, 58, 0.18); }
+
+    .stage {
+      position: relative;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) + 4px);
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      padding: 22px 18px 12px;
+      scroll-behavior: smooth;
+    }
+
+    .empty {
+      min-height: 52vh;
+      display: grid;
+      place-content: center;
+      text-align: center;
+      gap: 10px;
+      padding: 24px;
+      animation: rise 700ms ease both;
+    }
+
+    .empty h2 {
+      margin: 0;
+      font-family: "Instrument Serif", serif;
+      font-weight: 400;
+      font-size: clamp(1.7rem, 3.5vw, 2.3rem);
+      letter-spacing: -0.01em;
+    }
+
+    .empty p {
+      margin: 0 auto;
+      max-width: 34ch;
+      color: var(--ink-soft);
+      line-height: 1.55;
+      font-size: 0.95rem;
+    }
+
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .suggestions button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.7);
+      color: var(--ink-soft);
+      border-radius: 999px;
+      padding: 9px 14px;
+      font: 500 0.8rem "Sora", sans-serif;
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    .suggestions button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(31, 111, 91, 0.4);
+      color: var(--accent-deep);
+    }
+
+    .thread {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .msg {
+      max-width: min(92%, 640px);
+      animation: rise 320ms ease both;
+    }
+    .msg.user { align-self: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
+    .bubble {
+      padding: 13px 15px;
+      border-radius: 16px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.95rem;
+    }
+    .msg.user .bubble {
+      background: var(--ink);
+      color: #f4f7f5;
+      border-bottom-right-radius: 6px;
+    }
+    .msg.assistant .bubble {
+      background: rgba(255,255,255,0.92);
+      border: 1px solid var(--line);
+      border-bottom-left-radius: 6px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin-top: 8px;
+      padding-left: 2px;
+      color: var(--muted);
+      font-size: 0.74rem;
+      letter-spacing: 0.01em;
+    }
+
+    .tier {
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .tier.cheap { color: var(--cheap); }
+    .tier.mid { color: var(--mid); }
+    .tier.hard { color: var(--hard); }
+
+    .composer-wrap {
+      display: grid;
+      gap: 8px;
+      animation: rise 620ms ease both;
+    }
+
+    .composer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.86);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      transition: border-color 180ms ease, box-shadow 180ms ease;
+    }
+    .composer:focus-within {
+      border-color: rgba(31, 111, 91, 0.45);
+      box-shadow: 0 18px 50px rgba(20, 33, 43, 0.1), 0 0 0 3px rgba(31, 111, 91, 0.12);
+    }
+
+    textarea {
+      width: 100%;
+      resize: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      font: 400 0.95rem/1.45 "Sora", sans-serif;
+      padding: 10px 8px;
+      min-height: 48px;
+      max-height: 160px;
+    }
+
+    .send {
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      background: var(--accent);
+      color: white;
+      font: 600 0.86rem "Sora", sans-serif;
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: background 160ms ease, transform 160ms ease, opacity 160ms ease;
+    }
+    .send:hover { background: var(--accent-deep); transform: translateY(-1px); }
+    .send:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+    .hint {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.74rem;
+      padding: 0 4px;
+    }
+
+    .settings {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .settings input {
+      width: 140px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.65);
+      padding: 5px 8px;
+      font: 400 0.72rem "Sora", sans-serif;
+      color: var(--ink-soft);
+      outline: none;
+    }
+    .settings input:focus { border-color: rgba(31, 111, 91, 0.45); }
+
+    .typing {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      height: 1.2em;
+    }
+    .typing span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      animation: bounce 1s infinite ease-in-out;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.15s; }
+    .typing span:nth-child(3) { animation-delay: 0.3s; }
+
+    .error .bubble {
+      border-color: rgba(155, 58, 58, 0.35);
+      color: #7a2d2d;
+      background: #fff5f4;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+      40% { transform: translateY(-4px); opacity: 1; }
+    }
+
+    @media (max-width: 640px) {
+      .shell { padding: 18px 12px 12px; }
+      .hint { flex-direction: column; align-items: flex-start; }
+      .settings input { width: 120px; }
+      .msg { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1 class="brand">Dis<em>patch</em></h1>
+      <div class="status" id="status">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">checking…</span>
+      </div>
+    </header>
+
+    <main class="stage" id="stage">
+      <div class="empty" id="empty">
+        <h2>Route first. Then answer.</h2>
+        <p>Dispatch classifies each prompt into cheap, mid, or hard — then calls the right model.</p>
+        <div class="suggestions">
+          <button type="button" data-prompt="Translate hello to Spanish">Translate hello</button>
+          <button type="button" data-prompt="Summarize this in one sentence: Dispatch routes LLM requests to the right model.">Quick summary</button>
+          <button type="button" data-prompt="Design a distributed system for multi-region chat with failover and consistency tradeoffs.">Hard design</button>
+        </div>
+      </div>
+      <div class="thread" id="thread" hidden></div>
+    </main>
+
+    <div class="composer-wrap">
+      <form class="composer" id="form">
+        <textarea id="input" rows="1" placeholder="Ask something…" autofocus></textarea>
+        <button class="send" id="send" type="submit">Send</button>
+      </form>
+      <div class="hint">
+        <span>Enter to send · Shift+Enter for newline</span>
+        <label class="settings">
+          API key
+          <input id="apiKey" type="password" placeholder="optional" autocomplete="off" />
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const stage = document.getElementById("stage");
+    const empty = document.getElementById("empty");
+    const thread = document.getElementById("thread");
+    const form = document.getElementById("form");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+    const apiKeyInput = document.getElementById("apiKey");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+
+    const KEY = "dispatch.demo.apiKey";
+    apiKeyInput.value = localStorage.getItem(KEY) || "";
+    apiKeyInput.addEventListener("change", () => {
+      localStorage.setItem(KEY, apiKeyInput.value.trim());
+    });
+
+    function authHeaders() {
+      const key = apiKeyInput.value.trim();
+      return key ? { Authorization: `Bearer ${key}` } : {};
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch("/ready");
+        const data = await res.json();
+        if (data.ready) {
+          statusDot.className = "dot ok";
+          const bits = [data.mode || "ready", data.profile].filter(Boolean);
+          statusText.textContent = bits.join(" · ");
+        } else {
+          statusDot.className = "dot bad";
+          statusText.textContent = data.error || "not ready";
+        }
+      } catch {
+        statusDot.className = "dot bad";
+        statusText.textContent = "offline";
+      }
+    }
+
+    function showThread() {
+      empty.hidden = true;
+      thread.hidden = false;
+    }
+
+    function appendMessage(role, text, meta) {
+      showThread();
+      const wrap = document.createElement("div");
+      wrap.className = `msg ${role}${meta && meta.error ? " error" : ""}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      if (meta && meta.typing) {
+        bubble.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
+      } else {
+        bubble.textContent = text;
+      }
+      wrap.appendChild(bubble);
+
+      if (meta && !meta.typing && !meta.error && role === "assistant") {
+        const row = document.createElement("div");
+        row.className = "meta";
+        const tier = (meta.tier || "—").toLowerCase();
+        row.innerHTML = `
+          <span class="tier ${tier}">${tier}</span>
+          <span>${meta.provider || "—"}</span>
+          <span>${meta.provider_model_id || meta.model_key || "—"}</span>
+          <span>${meta.latency_ms != null ? Math.round(meta.latency_ms) + " ms" : ""}</span>
+        `;
+        wrap.appendChild(row);
+      }
+
+      thread.appendChild(wrap);
+      stage.scrollTop = stage.scrollHeight;
+      return wrap;
+    }
+
+    function autosize() {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 160) + "px";
+    }
+    input.addEventListener("input", autosize);
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    document.querySelectorAll(".suggestions button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        input.value = btn.dataset.prompt || "";
+        autosize();
+        form.requestSubmit();
+      });
+    });
+
+    async function complete(prompt) {
+      const res = await fetch("/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+        body: JSON.stringify({ prompt, max_output_tokens: 512 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.detail;
+        const message = typeof detail === "object" && detail?.message
+          ? detail.message
+          : (typeof detail === "string" ? detail : `Request failed (${res.status})`);
+        throw new Error(message);
+      }
+      return data;
+    }
+
+    let busy = false;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const prompt = input.value.trim();
+      if (!prompt || busy) return;
+
+      busy = true;
+      send.disabled = true;
+      appendMessage("user", prompt);
+      input.value = "";
+      autosize();
+      const pending = appendMessage("assistant", "", { typing: true });
+
+      try {
+        const data = await complete(prompt);
+        pending.remove();
+        appendMessage("assistant", data.response || "(empty response)", {
+          tier: data.tier,
+          provider: data.provider,
+          provider_model_id: data.provider_model_id,
+          model_key: data.model_key,
+          latency_ms: data.latency_ms,
+        });
+      } catch (err) {
+        pending.remove();
+        appendMessage("assistant", err.message || "Something went wrong", { error: true });
+      } finally {
+        busy = false;
+        send.disabled = false;
+        input.focus();
+      }
+    });
+
+    refreshStatus();
+    setInterval(refreshStatus, 15000);
+  </script>
+</body>
+</html>

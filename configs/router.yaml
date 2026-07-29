@@ -47,7 +47,7 @@ cache:
   decision_ttl_seconds: 300
 
 telemetry:
-  mode: langfuse+logging
+  mode: logging
 
 request_limits:
   max_prompt_chars: 50000

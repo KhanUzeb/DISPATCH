@@ -19,9 +19,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .router.prompting import build_routing_prompt
 from .router.passthrough import (
     dispatch_headers,
     forward_openai_chat,
+    has_upstream_credentials,
     resolve_auth_headers,
 )
 from .router.schemas import RoutingConstraints
@@ -82,22 +84,15 @@ def _message_text(content: Any) -> str:
 
 
 def messages_to_prompt(messages: list[ChatMessage], *, max_chars: int = 4000) -> str:
-    """Build classification text from system + conversation context (bounded)."""
-    parts: list[str] = []
+    """Build stable classification text from latest user intent."""
+    normalized: list[tuple[str, str]] = []
     for message in messages:
         text = _message_text(message.content).strip()
         if not text:
             continue
         role = message.role if message.role in {"system", "user", "assistant", "human"} else "user"
-        if role == "human":
-            role = "user"
-        parts.append(f"{role}: {text}")
-    joined = "\n".join(parts).strip()
-    if not joined:
-        return ""
-    if len(joined) <= max_chars:
-        return joined
-    return joined[-max_chars:]
+        normalized.append((role, text))
+    return build_routing_prompt(normalized, max_chars=max_chars)
 
 
 def normalize_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
@@ -208,6 +203,19 @@ def _raw_payload(req: ChatCompletionsRequest) -> dict[str, Any]:
     return data
 
 
+def _response_format_requires_structured_output(response_format: Any) -> bool:
+    """Only JSON response formats require structured-output-capable models."""
+    if response_format is None:
+        return False
+    if isinstance(response_format, str):
+        normalized = response_format.strip().lower()
+        return normalized in {"json_object", "json_schema"}
+    if isinstance(response_format, dict):
+        kind = str(response_format.get("type", "")).strip().lower()
+        return kind in {"json_object", "json_schema"}
+    return bool(response_format)
+
+
 def register_openai_routes(
     *,
     get_service,
@@ -274,7 +282,14 @@ def register_openai_routes(
         if len(prompt) > svc.config.request_max_prompt_chars:
             return openai_error("prompt exceeds configured limit", status=400)
 
-        max_tokens = req.max_tokens or req.max_completion_tokens or 1024
+        if req.max_tokens is not None:
+            max_tokens = req.max_tokens
+        elif req.max_completion_tokens is not None:
+            max_tokens = req.max_completion_tokens
+        else:
+            max_tokens = 1024
+        if max_tokens <= 0:
+            return openai_error("max_tokens must be > 0", status=400)
         if max_tokens > svc.config.request_max_output_tokens:
             return openai_error("max_tokens exceeds configured limit", status=400)
 
@@ -320,7 +335,10 @@ async def _passthrough_chat(
         incoming_key = incoming_key or request.headers.get("x-api-key")
         decision = svc.decide_for_client(
             prompt,
-            expects_structured_output=bool(req.response_format) or req.expects_structured_output,
+            expects_structured_output=(
+                req.expects_structured_output
+                or _response_format_requires_structured_output(req.response_format)
+            ),
             profile=profile,
             upstream_api_key=profile.upstream_api_key or incoming_key,
         )
@@ -352,6 +370,14 @@ async def _passthrough_chat(
                     err_type="authentication_error",
                     status=401,
                 )
+
+    if not has_upstream_credentials(auth, protocol="openai"):
+        return openai_error(
+            "Passthrough needs an upstream API key (Authorization Bearer, x-api-key, "
+            "or DISPATCH_UPSTREAM_API_KEY).",
+            err_type="authentication_error",
+            status=401,
+        )
 
     try:
         result = forward_openai_chat(
@@ -450,7 +476,10 @@ def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, prompt: s
         max_cost_usd=req.max_cost_usd,
         max_latency_ms=req.max_latency_ms,
         min_context_window=req.min_context_window,
-        require_structured_output=req.expects_structured_output or bool(req.response_format),
+        require_structured_output=(
+            req.expects_structured_output
+            or _response_format_requires_structured_output(req.response_format)
+        ),
         require_tool_calling=has_tools_hint,
         estimated_output_tokens=max_tokens,
     )

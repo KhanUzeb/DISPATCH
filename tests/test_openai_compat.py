@@ -1,5 +1,6 @@
 from src.openai_compat import (
     ChatMessage,
+    _response_format_requires_structured_output,
     build_chat_completion_response,
     check_api_key,
     messages_to_prompt,
@@ -7,7 +8,7 @@ from src.openai_compat import (
 )
 
 
-def test_messages_to_prompt_includes_conversation_context():
+def test_messages_to_prompt_prefers_latest_user_intent():
     messages = [
         ChatMessage(role="system", content="You are helpful"),
         ChatMessage(role="user", content="first"),
@@ -17,7 +18,8 @@ def test_messages_to_prompt_includes_conversation_context():
     prompt = messages_to_prompt(messages)
     assert "system: You are helpful" in prompt
     assert "user: summarize this please" in prompt
-    assert "assistant: ok" in prompt
+    assert "assistant: ok" not in prompt
+    assert "user: first" not in prompt
 
 
 def test_messages_to_prompt_truncates_from_end():
@@ -55,3 +57,20 @@ def test_check_api_key_optional(monkeypatch):
     monkeypatch.delenv("ROUTER_API_KEY", raising=False)
     check_api_key(None)
     check_api_key("Bearer anything")
+
+
+def test_response_format_requires_structured_output_only_for_json_types():
+    assert _response_format_requires_structured_output(None) is False
+    assert _response_format_requires_structured_output({"type": "text"}) is False
+    assert _response_format_requires_structured_output("text") is False
+    assert _response_format_requires_structured_output({"type": "json_object"}) is True
+    assert _response_format_requires_structured_output({"type": "json_schema"}) is True
+    assert _response_format_requires_structured_output("json_object") is True
+
+
+def test_messages_to_prompt_empty_when_no_user():
+    messages = [
+        ChatMessage(role="system", content="You are helpful"),
+        ChatMessage(role="assistant", content="ready"),
+    ]
+    assert messages_to_prompt(messages) == ""

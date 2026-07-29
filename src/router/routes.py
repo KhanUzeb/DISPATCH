@@ -91,6 +91,8 @@ class ScoringConfig:
     centroid_weight: float = 0.35
     # Prefer cheaper tier when top route scores fall within this band.
     ambiguity_band: float = 0.08
+    # Do not apply cheap-bias when confidence is already high.
+    ambiguity_max_score: float = 0.56
 
 
 @dataclass(frozen=True)
@@ -171,6 +173,7 @@ def _load_scoring(raw: dict) -> ScoringConfig:
         overlap_cap=float(section.get("overlap_cap", section.get("boost_cap", 0.22))),
         centroid_weight=float(section.get("centroid_weight", 0.35)),
         ambiguity_band=float(section.get("ambiguity_band", 0.08)),
+        ambiguity_max_score=float(section.get("ambiguity_max_score", 0.56)),
     )
 
 
@@ -228,6 +231,7 @@ def load_route_store(path: str | Path, default_threshold: float = 0.7) -> RouteS
                 "overlap_cap": scoring.overlap_cap,
                 "centroid_weight": scoring.centroid_weight,
                 "ambiguity_band": scoring.ambiguity_band,
+                "ambiguity_max_score": scoring.ambiguity_max_score,
             },
         },
         sort_keys=True,

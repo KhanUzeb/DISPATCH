@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -12,18 +12,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from .anthropic_compat import register_anthropic_routes
 from .openai_compat import register_openai_routes
-from .router.classifier import Classifier
-from .router.clients import load_client_config
-from .router.config import ConfigError, load_config
-from .router.encoder import FakeEncoder, HuggingFaceEncoder
-from .router.executor import Executor
-from .router.index import InMemoryNumpyIndex
-from .router.models import load_model_registry
-from .router.providers.factory import build_provider_registry
-from .router.routes import load_route_store
+from .router.bootstrap import build_routing_service
 from .router.schemas import RoutingConstraints, Tier
 from .router.security import SlidingWindowRateLimiter, require_router_auth
 from .router.service import RoutingService
+from .router.surface import RequestLimitError, ready_payload, validate_request_limits
 from .router.telemetry import (
     InMemoryTelemetry,
     LangfuseTelemetry,
@@ -60,65 +53,36 @@ class ErrorResponse(BaseModel):
 service: RoutingService | None = None
 startup_error: str | None = None
 telemetry = NoopTelemetry()
-_metrics_path = Path(__file__).resolve().parents[1] / ".dispatch_metrics.jsonl"
-memory_telemetry = InMemoryTelemetry(max_events=1000, persist_path=_metrics_path)
+memory_telemetry = InMemoryTelemetry(max_events=1000)
 rate_limiter = SlidingWindowRateLimiter.from_env()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global service, startup_error, telemetry
-    try:
-        cfg = load_config()
-        route_store = load_route_store(cfg.routes_path, default_threshold=cfg.default_threshold)
-        model_registry = load_model_registry(cfg.models_path)
-        client_config = load_client_config(cfg.clients_path)
-        if os.environ.get("ROUTER_USE_FAKE_ENCODER", "").lower() == "true":
-            encoder = FakeEncoder()
-            print("[dispatch] encoder=fake (set ROUTER_USE_FAKE_ENCODER=false for real MiniLM routing)")
-        else:
-            try:
-                encoder = HuggingFaceEncoder(cfg.encoder_model, device=cfg.encoder_device)
-                encoder.warmup()
-                print(f"[dispatch] encoder={cfg.encoder_model}")
-            except Exception as exc:
-                print(f"[dispatch] real encoder unavailable ({exc}); falling back to FakeEncoder")
-                encoder = FakeEncoder()
-        index = InMemoryNumpyIndex()
-        classifier = Classifier(
-            route_store=route_store,
-            encoder=encoder,
-            index=index,
-            top_k=cfg.top_k,
-            aggregation=cfg.route_aggregation,
-        )
-        classifier.initialize()
-        providers = build_provider_registry(timeouts_ms=cfg.provider_timeouts_ms)
-        service = RoutingService(
-            classifier,
-            Executor(
-                providers,
-                max_fallbacks=cfg.max_fallbacks,
-                retries_by_provider=cfg.provider_retries,
-            ),
-            model_registry,
-            cfg,
-            client_config=client_config,
-        )
-        active = client_config.active()
-        tier_counts = {t.value: len(model_registry.get_by_tier(t)) for t in Tier}
+    service, startup_error = build_routing_service(log_startup=True)
+    if service is None:
+        print(f"[dispatch] {startup_error}")
+    else:
+        active = service.active_profile
+        registry = service.model_registry
+        tier_counts = {t.value: len(registry.get_by_tier(t)) for t in Tier}
+        profile_bits = ""
+        if active is not None:
+            profile_bits = (
+                f"profile={active.name} mode={active.mode} protocol={active.protocol} "
+                + (f"upstream={active.upstream_base_url} " if active.is_passthrough else "")
+            )
         print(
-            f"[dispatch] profile={active.name} mode={active.mode} protocol={active.protocol} "
-            f"models_source={model_registry.source} tiers={tier_counts}"
-            + (f" upstream={active.upstream_base_url}" if active.is_passthrough else "")
+            f"[dispatch] {profile_bits}"
+            f"models_source={registry.source} tiers={tier_counts}"
         )
-        for spec in model_registry.enabled_models()[:12]:
+        for spec in registry.enabled_models()[:12]:
             print(f"[dispatch]   {spec.tier.value:5} {spec.provider.value:12} {spec.provider_model_id}")
-        if len(model_registry.enabled_models()) > 12:
-            print(f"[dispatch]   … +{len(model_registry.enabled_models()) - 12} more")
+        if len(registry.enabled_models()) > 12:
+            print(f"[dispatch]   … +{len(registry.enabled_models()) - 12} more")
 
-
-        mode = (cfg.telemetry_mode or "noop").lower()
+        mode = (service.config.telemetry_mode or "noop").lower()
         sinks: list = [memory_telemetry]
         if mode == "logging":
             sinks.append(LoggingTelemetry())
@@ -128,15 +92,6 @@ async def lifespan(app: FastAPI):
             sinks.append(LoggingTelemetry())
             sinks.append(LangfuseTelemetry())
         telemetry = MultiTelemetry(sinks=sinks)
-        startup_error = None
-    except ConfigError as exc:
-        startup_error = str(exc)
-        service = None
-        print(f"[dispatch] startup config error: {startup_error}")
-    except Exception as exc:
-        startup_error = f"startup failed: {exc}"
-        service = None
-        print(f"[dispatch] {startup_error}")
     yield
 
 
@@ -156,19 +111,18 @@ def _service_or_raise() -> RoutingService:
 
 
 def _validate_request_limits(svc: RoutingService, *, prompt: str, max_output_tokens: int) -> None:
-    if len(prompt) > svc.config.request_max_prompt_chars:
+    try:
+        validate_request_limits(svc, prompt=prompt, max_output_tokens=max_output_tokens)
+    except RequestLimitError as exc:
+        message = str(exc)
+        if "prompt exceeds" in message:
+            message = "prompt exceeds limit"
+        elif "max_output_tokens exceeds" in message:
+            message = "max_output_tokens exceeds limit"
         raise HTTPException(
             status_code=400,
-            detail=ErrorResponse(error_category="invalid_request", message="prompt exceeds limit").model_dump(),
-        )
-    if max_output_tokens > svc.config.request_max_output_tokens:
-        raise HTTPException(
-            status_code=400,
-            detail=ErrorResponse(
-                error_category="invalid_request",
-                message="max_output_tokens exceeds limit",
-            ).model_dump(),
-        )
+            detail=ErrorResponse(error_category="invalid_request", message=message).model_dump(),
+        ) from exc
 
 
 def _emit_telemetry(event: RoutingTelemetryEvent) -> None:
@@ -181,7 +135,7 @@ def _emit_telemetry(event: RoutingTelemetryEvent) -> None:
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     path = request.url.path
-    if path in {"/health", "/ready"}:
+    if path in {"/health", "/ready", "/demo", "/"}:
         return await call_next(request)
     client = request.client.host if request.client else "unknown"
     if not rate_limiter.allow(client):
@@ -199,6 +153,13 @@ app.include_router(register_openai_routes(get_service=_service_or_raise, emit_te
 app.include_router(register_anthropic_routes(get_service=_service_or_raise, emit_telemetry=_emit_telemetry))
 
 
+@app.get("/")
+@app.get("/demo")
+def chat_demo():
+    html_path = Path(__file__).resolve().parent / "chat.html"
+    return FileResponse(str(html_path), media_type="text/html")
+
+
 @app.get("/health")
 def health():
     profile = service.active_profile if service else None
@@ -214,34 +175,7 @@ def ready():
     if service is None:
         # Avoid leaking absolute filesystem paths to clients.
         return {"ready": False, "error": "startup failed — check server logs"}
-    profile = service.active_profile
-    registry = service.model_registry
-    payload = {
-        "ready": True,
-        "models_source": registry.source,
-        "models_version": registry.version,
-        "models": [
-            {
-                "key": m.key,
-                "id": m.provider_model_id,
-                "provider": m.provider.value,
-                "tier": m.tier.value,
-            }
-            for m in registry.enabled_models()
-        ],
-    }
-    if profile is not None:
-        payload["profile"] = profile.name
-        payload["mode"] = profile.mode
-        payload["protocol"] = profile.protocol
-        if profile.is_passthrough:
-            try:
-                profile.ensure_models(api_key=profile.upstream_api_key or None)
-            except Exception as exc:
-                payload["discover_error"] = str(exc)
-            payload["tier_models"] = dict(profile.models)
-            payload["upstream"] = profile.upstream_base_url
-    return payload
+    return ready_payload(service)
 
 
 @app.post("/models/refresh")
@@ -261,17 +195,6 @@ def refresh_models(_: None = Depends(require_router_auth)):
             "hard": [m.provider_model_id for m in refreshed.get_by_tier(Tier.HARD)],
         },
     }
-
-
-@app.get("/dashboard")
-def dashboard(_: None = Depends(require_router_auth)):
-    html_path = Path(__file__).resolve().parent / "dashboard.html"
-    return FileResponse(str(html_path), media_type="text/html")
-
-
-@app.get("/metrics/recent")
-def metrics_recent(limit: int = 100, _: None = Depends(require_router_auth)):
-    return {"events": memory_telemetry.recent(limit=max(1, min(limit, 500)))}
 
 
 @app.post("/route")
@@ -395,6 +318,19 @@ def route_only(req: CompleteRequest, _: None = Depends(require_router_auth)):
 def complete(req: CompleteRequest, _: None = Depends(require_router_auth)):
     svc = _service_or_raise()
     _validate_request_limits(svc, prompt=req.prompt, max_output_tokens=req.max_output_tokens)
+    profile = svc.active_profile
+    if profile is not None and profile.is_passthrough:
+        endpoint = "/v1/messages" if profile.protocol == "anthropic" else "/v1/chat/completions"
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_category="invalid_request",
+                message=(
+                    f"Passthrough profile '{profile.name}' cannot execute via /complete. "
+                    f"Use {endpoint} so Dispatch can forward to your upstream."
+                ),
+            ).model_dump(),
+        )
     constraints = RoutingConstraints(
         max_cost_usd=req.max_cost_usd,
         max_latency_ms=req.max_latency_ms,

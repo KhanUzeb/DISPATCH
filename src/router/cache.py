@@ -5,9 +5,9 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
-from .schemas import RoutingDecision, to_dict
+from .schemas import to_dict
 
 
 @dataclass(frozen=True)
@@ -34,15 +34,15 @@ class DecisionCacheKey:
 
 @dataclass
 class DecisionCacheEntry:
-    decision: RoutingDecision
+    decision: Any
     expires_at: float
 
 
 class DecisionCache(Protocol):
-    def get(self, key: DecisionCacheKey) -> RoutingDecision | None:
+    def get(self, key: DecisionCacheKey) -> Any | None:
         ...
 
-    def set(self, key: DecisionCacheKey, decision: RoutingDecision) -> None:
+    def set(self, key: DecisionCacheKey, decision: Any) -> None:
         ...
 
 
@@ -53,7 +53,7 @@ class InMemoryDecisionCache:
         self._store: dict[str, DecisionCacheEntry] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: DecisionCacheKey) -> RoutingDecision | None:
+    def get(self, key: DecisionCacheKey) -> Any | None:
         try:
             hashed = key.to_hash()
             with self._lock:
@@ -70,7 +70,7 @@ class InMemoryDecisionCache:
         except Exception:
             return None
 
-    def set(self, key: DecisionCacheKey, decision: RoutingDecision) -> None:
+    def set(self, key: DecisionCacheKey, decision: Any) -> None:
         try:
             json.dumps(to_dict(decision), sort_keys=True)
             hashed = key.to_hash()

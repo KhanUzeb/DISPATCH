@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from .discover import TieringConfig, discover_for_upstream
 from .schemas import Provider, Tier
 
 logger = logging.getLogger(__name__)
+_ENSURE_MODELS_LOCK = threading.Lock()
 
 
 class ClientConfigError(RuntimeError):
@@ -57,51 +59,55 @@ class ClientProfile:
         """Fetch tier models from the tool upstream when not already set."""
         if self.has_all_tier_models():
             return
-        if not self.discover_models:
-            raise ClientConfigError(
-                f"Profile '{self.name}' is missing models.cheap/mid/hard and discover_models is false"
+        with _ENSURE_MODELS_LOCK:
+            # Re-check under lock to avoid duplicate concurrent discovery.
+            if self.has_all_tier_models():
+                return
+            if not self.discover_models:
+                raise ClientConfigError(
+                    f"Profile '{self.name}' is missing models.cheap/mid/hard and discover_models is false"
+                )
+            if self.mode == "execute":
+                # Execute mode uses ModelRegistry discovery instead.
+                return
+            if not self.upstream_base_url and self.protocol != "anthropic":
+                raise ClientConfigError(
+                    f"Profile '{self.name}' needs upstream_base_url to discover models"
+                )
+            key = (api_key or self.upstream_api_key or "").strip()
+            provider = Provider.OPENROUTER if "openrouter.ai" in self.upstream_base_url else Provider.OPENAI_COMPATIBLE
+            if self.protocol == "anthropic":
+                provider = Provider.ANTHROPIC
+            try:
+                picked = discover_for_upstream(
+                    base_url=self.upstream_base_url or "https://api.anthropic.com",
+                    api_key=key,
+                    protocol=self.protocol,
+                    free_only=self.free_only,
+                    tiering=TieringConfig(prefer_free=self.free_only),
+                    provider=provider,
+                )
+            except Exception as exc:
+                raise ClientConfigError(
+                    f"Failed to discover models for profile '{self.name}' from "
+                    f"{self.upstream_base_url}: {exc}"
+                ) from exc
+            for tier in ("cheap", "mid", "hard"):
+                if not (self.models.get(tier) or "").strip() and picked.get(tier):
+                    self.models[tier] = picked[tier]
+            if not self.has_all_tier_models():
+                raise ClientConfigError(
+                    f"Upstream for '{self.name}' did not yield models for all tiers. "
+                    f"Got: {self.models}. Set DISPATCH_MODEL_CHEAP/MID/HARD."
+                )
+            self._discovered = True
+            logger.info(
+                "Discovered tier models for %s: cheap=%s mid=%s hard=%s",
+                self.name,
+                self.models.get("cheap"),
+                self.models.get("mid"),
+                self.models.get("hard"),
             )
-        if self.mode == "execute":
-            # Execute mode uses ModelRegistry discovery instead.
-            return
-        if not self.upstream_base_url and self.protocol != "anthropic":
-            raise ClientConfigError(
-                f"Profile '{self.name}' needs upstream_base_url to discover models"
-            )
-        key = (api_key or self.upstream_api_key or "").strip()
-        provider = Provider.OPENROUTER if "openrouter.ai" in self.upstream_base_url else Provider.OPENAI_COMPATIBLE
-        if self.protocol == "anthropic":
-            provider = Provider.ANTHROPIC
-        try:
-            picked = discover_for_upstream(
-                base_url=self.upstream_base_url or "https://api.anthropic.com",
-                api_key=key,
-                protocol=self.protocol,
-                free_only=self.free_only,
-                tiering=TieringConfig(prefer_free=self.free_only),
-                provider=provider,
-            )
-        except Exception as exc:
-            raise ClientConfigError(
-                f"Failed to discover models for profile '{self.name}' from "
-                f"{self.upstream_base_url}: {exc}"
-            ) from exc
-        for tier in ("cheap", "mid", "hard"):
-            if not (self.models.get(tier) or "").strip() and picked.get(tier):
-                self.models[tier] = picked[tier]
-        if not self.has_all_tier_models():
-            raise ClientConfigError(
-                f"Upstream for '{self.name}' did not yield models for all tiers. "
-                f"Got: {self.models}. Set DISPATCH_MODEL_CHEAP/MID/HARD."
-            )
-        self._discovered = True
-        logger.info(
-            "Discovered tier models for %s: cheap=%s mid=%s hard=%s",
-            self.name,
-            self.models.get("cheap"),
-            self.models.get("mid"),
-            self.models.get("hard"),
-        )
 
 
 @dataclass(frozen=True)
