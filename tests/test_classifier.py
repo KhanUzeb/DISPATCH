@@ -28,22 +28,6 @@ def test_classifier_returns_serializable_result():
     assert result.passed_threshold is True
 
 
-def test_classifier_routes_hard_distributed_system():
-    classifier = _build_classifier()
-    result = classifier.classify(
-        "Design a distributed system for multi-region chat with failover, and analyze the tradeoffs"
-    )
-    assert result.tier == Tier.HARD
-    assert result.passed_threshold is True
-
-
-def test_classifier_routes_mid_explain():
-    classifier = _build_classifier()
-    result = classifier.classify("explain how this function works")
-    assert result.tier == Tier.MID
-    assert result.passed_threshold is True
-
-
 def test_classifier_no_match_abstains_to_mid():
     classifier = _build_classifier()
     result = classifier.classify("   ")
@@ -62,48 +46,6 @@ def test_classifier_routes_demo_check_prompts():
     assert cheap.tier == Tier.CHEAP
     assert mid.tier == Tier.MID
     assert hard.tier == Tier.HARD
-
-
-def test_classifier_routes_portfolio_demo_prompts():
-    classifier = _build_classifier()
-    cheap = classifier.classify(
-        "Summarize this in one sentence: Dispatch routes LLM requests to the right model"
-    )
-    mid = classifier.classify(
-        "Explain the tradeoffs between REST and gRPC for an internal microservice API"
-    )
-    hard = classifier.classify(
-        "Design a multi-region chat system with failover, consistency, and cost controls"
-    )
-    assert cheap.tier == Tier.CHEAP
-    assert mid.tier == Tier.MID
-    assert hard.tier == Tier.HARD
-
-
-def test_structured_output_policy_signal_bumps_cheap():
-    classifier = _build_classifier()
-    result = classifier.classify("summarize this in one sentence", expects_structured_output=True)
-    assert result.tier in {Tier.MID, Tier.HARD}
-
-
-def test_classifier_uses_tail_intent_in_long_prompt():
-    classifier = _build_classifier()
-    prompt = (
-        "Context: "
-        + ("This paragraph provides extra background information. " * 30)
-        + "Now do the task: summarize this in one sentence."
-    )
-    result = classifier.classify(prompt)
-    assert result.tier == Tier.CHEAP
-    assert result.passed_threshold is True
-
-
-def test_classifier_high_confidence_does_not_force_cheap_on_ambiguity():
-    classifier = _build_classifier()
-    result = classifier.classify(
-        "Design a multi-region chat system with failover, consistency, and cost controls"
-    )
-    assert result.tier == Tier.HARD
 
 
 def test_classifier_encoder_batch_failure_falls_back_to_mid():

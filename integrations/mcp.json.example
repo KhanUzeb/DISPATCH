@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "dispatch": {
+      "command": "dispatch-mcp",
+      "env": {
+        "DISPATCH_PROFILE": "demo"
+      }
+    }
+  }
+}

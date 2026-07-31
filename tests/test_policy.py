@@ -1,11 +1,14 @@
+import pytest
+
 from src.router.models import load_model_registry
 from src.router.policy import route
 from src.router.schemas import ClassificationResult, Provider, RoutingConstraints, Tier
 
 
-def _registry():
+@pytest.fixture
+async def registry():
     # Offline: use fallback_models in models.yaml (no live Groq/OpenRouter fetch).
-    return load_model_registry("configs/models.yaml", discover=False)
+    return await load_model_registry("configs/models.yaml", discover=False)
 
 
 def _classification(tier: Tier) -> ClassificationResult:
@@ -20,8 +23,8 @@ def _classification(tier: Tier) -> ClassificationResult:
     )
 
 
-def test_policy_selects_feasible_model():
-    registry = _registry()
+@pytest.mark.asyncio
+async def test_policy_selects_feasible_model(registry):
     decision = route(
         classification=_classification(Tier.CHEAP),
         constraints=RoutingConstraints(),
@@ -35,8 +38,8 @@ def test_policy_selects_feasible_model():
     assert decision.selected_model.tier == Tier.CHEAP
 
 
-def test_policy_prefers_exact_hard_tier():
-    registry = _registry()
+@pytest.mark.asyncio
+async def test_policy_prefers_exact_hard_tier(registry):
     decision = route(
         classification=_classification(Tier.HARD),
         constraints=RoutingConstraints(),
@@ -50,9 +53,9 @@ def test_policy_prefers_exact_hard_tier():
     assert decision.selected_model.tier == Tier.HARD
 
 
-def test_policy_prefers_fast_models_among_equal_cost():
+@pytest.mark.asyncio
+async def test_policy_prefers_fast_models_among_equal_cost(registry):
     """Free-tier diversify must stay within near-latency ties (prefer Groq)."""
-    registry = _registry()
     providers: set[str] = set()
     models: set[str] = set()
     for i in range(24):
@@ -74,8 +77,8 @@ def test_policy_prefers_fast_models_among_equal_cost():
     assert len(models) >= 1
 
 
-def test_policy_never_violates_hard_constraints():
-    registry = _registry()
+@pytest.mark.asyncio
+async def test_policy_never_violates_hard_constraints(registry):
     decision = route(
         classification=_classification(Tier.MID),
         constraints=RoutingConstraints(max_latency_ms=1),
@@ -87,8 +90,8 @@ def test_policy_never_violates_hard_constraints():
     assert decision.error_category is not None
 
 
-def test_policy_enforces_structured_output_capability():
-    registry = _registry()
+@pytest.mark.asyncio
+async def test_policy_enforces_structured_output_capability(registry):
     decision = route(
         classification=_classification(Tier.CHEAP),
         constraints=RoutingConstraints(require_structured_output=True),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-import requests
+import httpx
 
 from ..schemas import Provider, ProviderRequest, ProviderResponse
 from .base import ProviderAdapter
@@ -18,7 +18,7 @@ class AnthropicAdapter(ProviderAdapter):
     def provider_name(self) -> str:
         return Provider.ANTHROPIC.value
 
-    def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
+    async def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
         if not self.api_key:
             raise RuntimeError("Missing ANTHROPIC_API_KEY")
 
@@ -37,16 +37,16 @@ class AnthropicAdapter(ProviderAdapter):
             payload["system"] = "\n".join(system_parts)
 
         start = time.perf_counter()
-        response = requests.post(
-            f"{self.base_url}/messages",
-            timeout=self.timeout_ms / 1000.0,
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
+        async with httpx.AsyncClient(timeout=self.timeout_ms / 1000.0) as client:
+            response = await client.post(
+                f"{self.base_url}/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
         latency_ms = (time.perf_counter() - start) * 1000
         if response.status_code == 401:
             raise RuntimeError("anthropic authentication failed")

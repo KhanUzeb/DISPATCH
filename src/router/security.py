@@ -1,4 +1,4 @@
-"""Lightweight auth + rate limiting for demo / portfolio deployments.
+"""Lightweight auth + rate limiting for local demo / MCP / API deployments.
 
 Not a full production security stack — enough to avoid an open proxy when
 `ROUTER_API_KEY` is set, and to bound abuse on a publicly reachable port.
@@ -10,7 +10,7 @@ import os
 import secrets
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 
 from fastapi import Header, HTTPException
 
@@ -66,11 +66,20 @@ def is_retryable_provider_error(exc: Exception) -> bool:
 
 
 class SlidingWindowRateLimiter:
-    """Simple per-key sliding window. Fail-open if misconfigured (limit <= 0)."""
+    """Simple per-key sliding window. Fail-open if misconfigured (limit <= 0).
 
-    def __init__(self, limit_per_minute: int = 60) -> None:
+    Tracked keys are bounded by an LRU (`max_tracked_clients`) so one-shot /
+    rotating client IPs cannot grow `_hits` without bound.
+    """
+
+    def __init__(
+        self,
+        limit_per_minute: int = 60,
+        max_tracked_clients: int = 10_000,
+    ) -> None:
         self.limit_per_minute = limit_per_minute
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self.max_tracked_clients = max(1, max_tracked_clients)
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     @classmethod
@@ -80,7 +89,12 @@ class SlidingWindowRateLimiter:
             limit = int(raw)
         except ValueError:
             limit = 60
-        return cls(limit_per_minute=limit)
+        raw_max = os.environ.get("ROUTER_RATE_LIMIT_MAX_TRACKED_CLIENTS", "10000").strip()
+        try:
+            max_tracked = int(raw_max)
+        except ValueError:
+            max_tracked = 10_000
+        return cls(limit_per_minute=limit, max_tracked_clients=max_tracked)
 
     def allow(self, key: str) -> bool:
         if self.limit_per_minute <= 0:
@@ -88,10 +102,17 @@ class SlidingWindowRateLimiter:
         now = time.monotonic()
         window_start = now - 60.0
         with self._lock:
-            bucket = self._hits[key]
+            bucket = self._hits.get(key)
+            if bucket is None:
+                bucket = deque()
+                self._hits[key] = bucket
+            else:
+                self._hits.move_to_end(key)
             while bucket and bucket[0] < window_start:
                 bucket.popleft()
             if len(bucket) >= self.limit_per_minute:
                 return False
             bucket.append(now)
+            while len(self._hits) > self.max_tracked_clients:
+                self._hits.popitem(last=False)
             return True

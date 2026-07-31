@@ -1,13 +1,12 @@
-"""Anthropic Messages API shim for Claude Code.
+"""Anthropic Messages API shim (`/v1/messages`).
 
-Claude Code speaks `/v1/messages` (not OpenAI chat completions). Point it at
-Dispatch with:
+Point an Anthropic-compatible client at Dispatch with:
 
   ANTHROPIC_BASE_URL=http://localhost:8000
   ANTHROPIC_AUTH_TOKEN=<your anthropic or gateway key>
 
 Dispatch classifies the prompt, rewrites `model` to the mapped tier model from
-the `claude-code` client profile, and forwards to Anthropic (or a compatible
+the `anthropic` client profile, and forwards to Anthropic (or a compatible
 gateway).
 """
 
@@ -124,14 +123,14 @@ def register_anthropic_routes(*, get_service, emit_telemetry) -> APIRouter:
         if profile is None or not profile.is_passthrough:
             return anthropic_error(
                 "Anthropic /v1/messages requires passthrough mode. "
-                "Set DISPATCH_PROFILE=claude-code (or another anthropic profile).",
+                "Set DISPATCH_PROFILE=anthropic (or another anthropic profile).",
                 err_type="invalid_request_error",
                 status=400,
             )
         if profile.protocol != "anthropic":
             return anthropic_error(
                 f"Active profile '{profile.name}' protocol is '{profile.protocol}', "
-                "expected 'anthropic'. Set DISPATCH_PROFILE=claude-code.",
+                "expected 'anthropic'. Set DISPATCH_PROFILE=anthropic.",
                 status=400,
             )
 
@@ -141,8 +140,9 @@ def register_anthropic_routes(*, get_service, emit_telemetry) -> APIRouter:
             auth_header = request.headers.get("authorization") or ""
             if auth_header.lower().startswith("bearer "):
                 incoming_key = incoming_key or auth_header[7:].strip()
-            decision = svc.decide_for_client(
+            decision = await svc.decide_for_client(
                 prompt,
+                client=request.app.state.http_client,
                 profile=profile,
                 upstream_api_key=profile.upstream_api_key or incoming_key,
             )
@@ -194,11 +194,12 @@ def register_anthropic_routes(*, get_service, emit_telemetry) -> APIRouter:
 
         payload = req.model_dump(exclude_none=True)
         try:
-            result = forward_anthropic_messages(
+            result = await forward_anthropic_messages(
                 profile=profile,
                 selected_model=decision.selected_model,
                 payload=payload,
                 auth_headers=auth,
+                client=request.app.state.http_client,
                 request_id=decision.request_id,
                 tier=decision.tier,
             )

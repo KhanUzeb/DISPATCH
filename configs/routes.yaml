@@ -1,6 +1,7 @@
 # Semantic routes — classifier matches prompts to these exemplars.
-# No hand-written regex. Soft keyword overlap is auto-derived from these
-# utterances at load time. Add paraphrases from real traffic to improve recall.
+# Used by chat demo, MCP route/complete, and /v1 classify paths.
+# Soft keyword overlap is auto-derived from these utterances at load time.
+# Add paraphrases from real traffic to improve recall.
 
 tiers:
   cheap:

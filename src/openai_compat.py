@@ -1,4 +1,4 @@
-"""OpenAI-compatible API shim for Codex / OpenCode / Cursor / Claude Code.
+"""OpenAI-compatible API shim (`/v1/chat/completions`).
 
 Two modes (from configs/clients.yaml / DISPATCH_* env):
 
@@ -13,7 +13,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, Iterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -154,8 +155,14 @@ def build_chat_completion_response(
     }
 
 
-def iter_sse_chunks(*, completion_id: str, model: str, text: str, created: int) -> Iterator[str]:
-    """Pseudo-stream: one role chunk, one content chunk, then stop + DONE."""
+async def iter_sse_chunks(
+    *,
+    completion_id: str,
+    model: str,
+    created: int,
+    deltas: AsyncIterator[str],
+) -> AsyncIterator[str]:
+    """Format real provider text deltas as OpenAI chat.completion SSE chunks."""
     first = {
         "id": completion_id,
         "object": "chat.completion.chunk",
@@ -165,9 +172,9 @@ def iter_sse_chunks(*, completion_id: str, model: str, text: str, created: int) 
     }
     yield f"data: {json.dumps(first)}\n\n"
 
-    chunk_size = 48
-    for i in range(0, max(len(text), 1), chunk_size):
-        piece = text[i : i + chunk_size] if text else ""
+    async for piece in deltas:
+        if not piece:
+            continue
         mid = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -305,7 +312,7 @@ def register_openai_routes(
             )
 
         # --- Execute: Dispatch's own providers ---
-        return _execute_chat(
+        return await _execute_chat(
             svc=svc,
             req=req,
             prompt=prompt,
@@ -327,14 +334,15 @@ async def _passthrough_chat(
 ):
     started = time.perf_counter()
     try:
-        # Prefer forwarded tool key for discovery + upstream.
+        # Prefer forwarded client key for discovery + upstream.
         incoming_key = None
         auth_header = request.headers.get("authorization") or ""
         if auth_header.lower().startswith("bearer "):
             incoming_key = auth_header[7:].strip()
         incoming_key = incoming_key or request.headers.get("x-api-key")
-        decision = svc.decide_for_client(
+        decision = await svc.decide_for_client(
             prompt,
+            client=request.app.state.http_client,
             expects_structured_output=(
                 req.expects_structured_output
                 or _response_format_requires_structured_output(req.response_format)
@@ -365,7 +373,7 @@ async def _passthrough_chat(
             else:
                 return openai_error(
                     "Passthrough needs DISPATCH_UPSTREAM_API_KEY (or upstream_api_key in "
-                    "clients.yaml) when ROUTER_API_KEY is set — the tool's Bearer is for "
+                    "clients.yaml) when ROUTER_API_KEY is set — the client's Bearer is for "
                     "Dispatch, not upstream.",
                     err_type="authentication_error",
                     status=401,
@@ -380,11 +388,12 @@ async def _passthrough_chat(
         )
 
     try:
-        result = forward_openai_chat(
+        result = await forward_openai_chat(
             profile=profile,
             selected_model=decision.selected_model,
             payload=_raw_payload(req),
             auth_headers=auth,
+            client=request.app.state.http_client,
             request_id=decision.request_id,
             tier=decision.tier,
         )
@@ -462,7 +471,7 @@ async def _passthrough_chat(
     )
 
 
-def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, prompt: str, max_tokens: int, emit_telemetry):
+async def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, prompt: str, max_tokens: int, emit_telemetry):
     has_tools_hint = (
         req.require_tool_calling
         or req.tools is not None
@@ -485,14 +494,25 @@ def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, prompt: s
     )
 
     started = time.perf_counter()
-    route_result, execution = svc.complete(
-        prompt,
-        constraints,
-        max_output_tokens=max_tokens,
-        expects_structured_output=constraints.require_structured_output,
-        messages=normalize_messages(req.messages),
-        temperature=float(req.temperature or 0.0),
-    )
+    deltas = None
+    if req.stream:
+        route_result, execution, deltas = await svc.complete_stream(
+            prompt,
+            constraints,
+            max_output_tokens=max_tokens,
+            expects_structured_output=constraints.require_structured_output,
+            messages=normalize_messages(req.messages),
+            temperature=float(req.temperature or 0.0),
+        )
+    else:
+        route_result, execution = await svc.complete(
+            prompt,
+            constraints,
+            max_output_tokens=max_tokens,
+            expects_structured_output=constraints.require_structured_output,
+            messages=normalize_messages(req.messages),
+            temperature=float(req.temperature or 0.0),
+        )
     total_latency = (time.perf_counter() - started) * 1000.0
     decision = route_result.decision
     selected = execution.used_model or decision.selected_model
@@ -534,7 +554,7 @@ def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, prompt: s
         )
 
     response = execution.response
-    if response is None:
+    if response is None or (req.stream and deltas is None):
         return openai_error("missing provider response", err_type="server_error", status=500)
 
     estimated = next(
@@ -582,12 +602,13 @@ def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, prompt: s
     }
 
     if req.stream:
+        assert deltas is not None
         return StreamingResponse(
             iter_sse_chunks(
                 completion_id=completion_id,
                 model=model_name,
-                text=response.text,
                 created=created,
+                deltas=deltas,
             ),
             media_type="text/event-stream",
             headers=headers,

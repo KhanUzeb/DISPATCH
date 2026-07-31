@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-import requests
+import httpx
 
 from ..schemas import Provider, ProviderRequest, ProviderResponse
 from .base import ProviderAdapter
@@ -20,7 +20,7 @@ class GoogleAdapter(ProviderAdapter):
     def provider_name(self) -> str:
         return Provider.GOOGLE.value
 
-    def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
+    async def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
         if not self.api_key:
             raise RuntimeError("Missing GOOGLE_API_KEY")
 
@@ -33,19 +33,19 @@ class GoogleAdapter(ProviderAdapter):
 
         url = f"{self.base_url}/models/{model_id}:generateContent"
         start = time.perf_counter()
-        response = requests.post(
-            url,
-            params={"key": self.api_key},
-            timeout=self.timeout_ms / 1000.0,
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": contents,
-                "generationConfig": {
-                    "temperature": request.temperature,
-                    "maxOutputTokens": request.max_output_tokens,
+        async with httpx.AsyncClient(timeout=self.timeout_ms / 1000.0) as client:
+            response = await client.post(
+                url,
+                params={"key": self.api_key},
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": contents,
+                    "generationConfig": {
+                        "temperature": request.temperature,
+                        "maxOutputTokens": request.max_output_tokens,
+                    },
                 },
-            },
-        )
+            )
         latency_ms = (time.perf_counter() - start) * 1000
         if response.status_code == 401:
             raise RuntimeError("google authentication failed")

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
+
+import httpx
 
 from .classifier import Classifier
 from .clients import load_client_config
@@ -20,33 +21,36 @@ from .service import RoutingService
 logger = logging.getLogger(__name__)
 
 
-def build_routing_service(*, log_startup: bool = True) -> tuple[RoutingService | None, str | None]:
+async def build_routing_service(
+    *,
+    http_client: httpx.AsyncClient | None = None,
+    log_startup: bool = True,
+) -> tuple[RoutingService | None, str | None]:
     """Build a ready RoutingService, or return (None, error)."""
     try:
         cfg = load_config()
         route_store = load_route_store(cfg.routes_path, default_threshold=cfg.default_threshold)
-        model_registry = load_model_registry(cfg.models_path)
+        model_registry = await load_model_registry(cfg.models_path, client=http_client)
         client_config = load_client_config(cfg.clients_path)
         if os.environ.get("ROUTER_USE_FAKE_ENCODER", "").lower() == "true":
             encoder = FakeEncoder()
             if log_startup:
-                msg = "encoder=fake (set ROUTER_USE_FAKE_ENCODER=false for real MiniLM routing)"
-                logger.info(msg)
-                # stderr only — stdout must stay clean for MCP stdio JSON-RPC
-                print(f"[dispatch] {msg}", file=sys.stderr)
+                # stderr via logging — stdout must stay clean for MCP stdio JSON-RPC
+                logger.info(
+                    "encoder=fake (set ROUTER_USE_FAKE_ENCODER=false for real MiniLM routing)"
+                )
         else:
             try:
                 encoder = HuggingFaceEncoder(cfg.encoder_model, device=cfg.encoder_device)
                 encoder.warmup()
                 if log_startup:
-                    msg = f"encoder={cfg.encoder_model}"
-                    logger.info(msg)
-                    print(f"[dispatch] {msg}", file=sys.stderr)
+                    logger.info("encoder=%s", cfg.encoder_model)
             except Exception as exc:
                 if log_startup:
-                    msg = f"real encoder unavailable ({exc}); falling back to FakeEncoder"
-                    logger.warning(msg)
-                    print(f"[dispatch] {msg}", file=sys.stderr)
+                    logger.warning(
+                        "real encoder unavailable (%s); falling back to FakeEncoder",
+                        exc,
+                    )
                 encoder = FakeEncoder()
 
         classifier = Classifier(

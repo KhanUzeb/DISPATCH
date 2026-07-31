@@ -1,5 +1,16 @@
+"""Dispatch FastAPI app — chat demo, dashboard, /route, /complete, and /v1 proxies.
+
+Surfaces:
+  GET  / /demo              chat UI (src/chat.html)
+  GET  /dashboard           routing & generation telemetry UI
+  POST /route /complete     native routing + execution
+  GET  /telemetry/recent    recent routing events for the dashboard
+  /v1/*                     OpenAI + Anthropic-compatible HTTP
+"""
+
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -13,6 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 from .anthropic_compat import register_anthropic_routes
 from .openai_compat import register_openai_routes
 from .router.bootstrap import build_routing_service
+from .router.config import max_request_bytes
+from .router.http_client import aclose_http_client, create_http_client, get_http_client, set_http_client
+from .router.logging_config import clear_request_id, setup_logging
 from .router.schemas import RoutingConstraints, Tier
 from .router.security import SlidingWindowRateLimiter, require_router_auth
 from .router.service import RoutingService
@@ -25,6 +39,8 @@ from .router.telemetry import (
     NoopTelemetry,
     RoutingTelemetryEvent,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CompleteRequest(BaseModel):
@@ -53,49 +69,74 @@ class ErrorResponse(BaseModel):
 service: RoutingService | None = None
 startup_error: str | None = None
 telemetry = NoopTelemetry()
-memory_telemetry = InMemoryTelemetry(max_events=1000)
+memory_telemetry = InMemoryTelemetry(
+    max_events=1000,
+    persist_path=Path(__file__).resolve().parents[1] / ".dispatch_metrics.jsonl",
+)
 rate_limiter = SlidingWindowRateLimiter.from_env()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global service, startup_error, telemetry
-    service, startup_error = build_routing_service(log_startup=True)
-    if service is None:
-        print(f"[dispatch] {startup_error}")
-    else:
-        active = service.active_profile
-        registry = service.model_registry
-        tier_counts = {t.value: len(registry.get_by_tier(t)) for t in Tier}
-        profile_bits = ""
-        if active is not None:
-            profile_bits = (
-                f"profile={active.name} mode={active.mode} protocol={active.protocol} "
-                + (f"upstream={active.upstream_base_url} " if active.is_passthrough else "")
-            )
-        print(
-            f"[dispatch] {profile_bits}"
-            f"models_source={registry.source} tiers={tier_counts}"
+    setup_logging()
+    http_client = create_http_client()
+    set_http_client(http_client)
+    app.state.http_client = http_client
+    try:
+        service, startup_error = await build_routing_service(
+            http_client=http_client,
+            log_startup=True,
         )
-        for spec in registry.enabled_models()[:12]:
-            print(f"[dispatch]   {spec.tier.value:5} {spec.provider.value:12} {spec.provider_model_id}")
-        if len(registry.enabled_models()) > 12:
-            print(f"[dispatch]   … +{len(registry.enabled_models()) - 12} more")
+        if service is None:
+            logger.error("%s", startup_error)
+        else:
+            active = service.active_profile
+            registry = service.model_registry
+            tier_counts = {t.value: len(registry.get_by_tier(t)) for t in Tier}
+            profile_bits = ""
+            if active is not None:
+                profile_bits = (
+                    f"profile={active.name} mode={active.mode} protocol={active.protocol} "
+                    + (f"upstream={active.upstream_base_url} " if active.is_passthrough else "")
+                )
+            logger.info(
+                "%smodels_source=%s tiers=%s",
+                profile_bits,
+                registry.source,
+                tier_counts,
+            )
+            for spec in registry.enabled_models()[:12]:
+                logger.info(
+                    "  %-5s %-12s %s",
+                    spec.tier.value,
+                    spec.provider.value,
+                    spec.provider_model_id,
+                )
+            if len(registry.enabled_models()) > 12:
+                logger.info("  … +%s more", len(registry.enabled_models()) - 12)
 
-        mode = (service.config.telemetry_mode or "noop").lower()
-        sinks: list = [memory_telemetry]
-        if mode == "logging":
-            sinks.append(LoggingTelemetry())
-        elif mode == "langfuse":
-            sinks.append(LangfuseTelemetry())
-        elif mode == "langfuse+logging":
-            sinks.append(LoggingTelemetry())
-            sinks.append(LangfuseTelemetry())
-        telemetry = MultiTelemetry(sinks=sinks)
-    yield
+            mode = (service.config.telemetry_mode or "noop").lower()
+            sinks: list = [memory_telemetry]
+            if mode == "logging":
+                sinks.append(LoggingTelemetry())
+            elif mode == "langfuse":
+                sinks.append(LangfuseTelemetry())
+            elif mode == "langfuse+logging":
+                sinks.append(LoggingTelemetry())
+                sinks.append(LangfuseTelemetry())
+            telemetry = MultiTelemetry(sinks=sinks)
+        yield
+    finally:
+        await aclose_http_client()
+        app.state.http_client = None
 
 
-app = FastAPI(title="Dispatch", lifespan=lifespan)
+app = FastAPI(
+    title="Dispatch",
+    description="Semantic LLM router — chat demo, dashboard, MCP, and OpenAI/Anthropic-compatible HTTP.",
+    lifespan=lifespan,
+)
 
 
 def _service_or_raise() -> RoutingService:
@@ -133,9 +174,17 @@ def _emit_telemetry(event: RoutingTelemetryEvent) -> None:
 
 
 @app.middleware("http")
+async def clear_request_id_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    finally:
+        clear_request_id()
+
+
+@app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     path = request.url.path
-    if path in {"/health", "/ready", "/demo", "/"}:
+    if path in {"/health", "/ready", "/demo", "/", "/dashboard"}:
         return await call_next(request)
     client = request.client.host if request.client else "unknown"
     if not rate_limiter.allow(client):
@@ -146,6 +195,34 @@ async def rate_limit_middleware(request: Request, call_next):
                 "message": "Too many requests. Set ROUTER_RATE_LIMIT_PER_MINUTE=0 to disable locally.",
             },
         )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def max_request_size_middleware(request: Request, call_next):
+    """Reject oversized bodies via Content-Length before Pydantic parsing."""
+    if request.method in {"POST", "PUT", "PATCH"}:
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                length = int(content_length)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error_category": "invalid_request",
+                        "message": "Invalid Content-Length header",
+                    },
+                )
+            limit = max_request_bytes()
+            if length > limit:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error_category": "payload_too_large",
+                        "message": "Request body exceeds configured maximum size",
+                    },
+                )
     return await call_next(request)
 
 
@@ -160,6 +237,20 @@ def chat_demo():
     return FileResponse(str(html_path), media_type="text/html")
 
 
+@app.get("/dashboard")
+def dashboard():
+    html_path = Path(__file__).resolve().parent / "dashboard.html"
+    return FileResponse(str(html_path), media_type="text/html")
+
+
+@app.get("/telemetry/recent")
+def telemetry_recent(limit: int = 100, _: None = Depends(require_router_auth)):
+    """Recent routing/generation events for the dashboard UI."""
+    capped = max(1, min(int(limit or 100), 500))
+    events = memory_telemetry.recent(limit=capped)
+    return {"count": len(events), "events": events}
+
+
 @app.get("/health")
 def health():
     profile = service.active_profile if service else None
@@ -171,18 +262,18 @@ def health():
 
 
 @app.get("/ready")
-def ready():
+async def ready():
     if service is None:
         # Avoid leaking absolute filesystem paths to clients.
         return {"ready": False, "error": "startup failed — check server logs"}
-    return ready_payload(service)
+    return await ready_payload(service, client=get_http_client())
 
 
 @app.post("/models/refresh")
-def refresh_models(_: None = Depends(require_router_auth)):
+async def refresh_models(_: None = Depends(require_router_auth)):
     """Re-fetch live catalogs from Groq / OpenRouter / configured sources."""
     svc = _service_or_raise()
-    refreshed = svc.model_registry.refresh()
+    refreshed = await svc.model_registry.refresh(client=get_http_client())
     svc.model_registry = refreshed
     return {
         "ok": True,
@@ -198,7 +289,7 @@ def refresh_models(_: None = Depends(require_router_auth)):
 
 
 @app.post("/route")
-def route_only(req: CompleteRequest, _: None = Depends(require_router_auth)):
+async def route_only(req: CompleteRequest, _: None = Depends(require_router_auth)):
     svc = _service_or_raise()
     _validate_request_limits(svc, prompt=req.prompt, max_output_tokens=req.max_output_tokens)
     profile = svc.active_profile
@@ -206,8 +297,9 @@ def route_only(req: CompleteRequest, _: None = Depends(require_router_auth)):
 
     # Passthrough profiles: return the client's mapped model (no Dispatch provider pick).
     if profile is not None and profile.is_passthrough:
-        decision = svc.decide_for_client(
+        decision = await svc.decide_for_client(
             req.prompt,
+            client=get_http_client(),
             expects_structured_output=req.expects_structured_output,
             profile=profile,
         )
@@ -315,7 +407,7 @@ def route_only(req: CompleteRequest, _: None = Depends(require_router_auth)):
 
 
 @app.post("/complete")
-def complete(req: CompleteRequest, _: None = Depends(require_router_auth)):
+async def complete(req: CompleteRequest, _: None = Depends(require_router_auth)):
     svc = _service_or_raise()
     _validate_request_limits(svc, prompt=req.prompt, max_output_tokens=req.max_output_tokens)
     profile = svc.active_profile
@@ -339,7 +431,7 @@ def complete(req: CompleteRequest, _: None = Depends(require_router_auth)):
         require_tool_calling=req.require_tool_calling,
     )
     started = time.perf_counter()
-    route_result, execution = svc.complete(
+    route_result, execution = await svc.complete(
         req.prompt,
         constraints,
         max_output_tokens=req.max_output_tokens,

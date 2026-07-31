@@ -19,6 +19,19 @@ class ConfigError(RuntimeError):
 KNOWN_PROVIDERS = [p.value for p in Provider]
 DEFAULT_PROVIDER_TIMEOUT_MS = 30000
 DEFAULT_PROVIDER_RETRIES = 0
+DEFAULT_MAX_REQUEST_BYTES = 2_000_000
+
+
+def max_request_bytes() -> int:
+    """Ceiling for raw HTTP request bodies (ROUTER_MAX_REQUEST_BYTES)."""
+    raw = os.environ.get("ROUTER_MAX_REQUEST_BYTES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_REQUEST_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_REQUEST_BYTES
+    return value if value > 0 else DEFAULT_MAX_REQUEST_BYTES
 
 
 @dataclass(frozen=True)
@@ -40,6 +53,7 @@ class RouterRuntimeConfig:
     telemetry_mode: str
     request_max_prompt_chars: int
     request_max_output_tokens: int
+    request_max_bytes: int
     provider_timeouts_ms: dict[str, int]
     provider_retries: dict[str, int]
     config_version: str
@@ -143,6 +157,7 @@ def load_config(project_root: str | Path | None = None) -> RouterRuntimeConfig:
         telemetry_mode=str(telemetry.get("mode", "noop")),
         request_max_prompt_chars=int(request_limits.get("max_prompt_chars", 50000)),
         request_max_output_tokens=int(request_limits.get("max_output_tokens", 4096)),
+        request_max_bytes=max_request_bytes(),
         provider_timeouts_ms=provider_timeouts_ms,
         provider_retries=provider_retries,
         config_version=_hash_obj(merged_for_version),

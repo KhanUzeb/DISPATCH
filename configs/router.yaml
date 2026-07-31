@@ -1,3 +1,6 @@
+# Router runtime — thresholds, policy, providers, cache, limits.
+# Paths are relative to the project root.
+
 routes_path: configs/routes.yaml
 models_path: configs/models.yaml
 clients_path: configs/clients.yaml
@@ -51,4 +54,5 @@ telemetry:
 
 request_limits:
   max_prompt_chars: 50000
-  max_output_tokens: 1024
+  # Headroom for OpenAI/Anthropic-compatible /v1 clients.
+  max_output_tokens: 128000

@@ -90,6 +90,14 @@
       white-space: nowrap;
     }
 
+    .dash-link {
+      color: var(--accent-deep);
+      text-decoration: none;
+      margin-left: 6px;
+      font-weight: 500;
+    }
+    .dash-link:hover { text-decoration: underline; }
+
     .dot {
       width: 8px;
       height: 8px;
@@ -338,6 +346,7 @@
       <div class="status" id="status">
         <span class="dot" id="statusDot"></span>
         <span id="statusText">checking…</span>
+        <a class="dash-link" href="/dashboard">Dashboard</a>
       </div>
     </header>
 

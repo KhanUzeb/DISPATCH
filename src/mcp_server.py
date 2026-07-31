@@ -1,11 +1,19 @@
+"""Dispatch MCP server — health, ready, route, complete, refresh_models.
+
+Execute-mode surface (use DISPATCH_PROFILE=demo). For OpenAI/Anthropic HTTP
+proxies, run the FastAPI app instead (`src.api:app`).
+"""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
 from .router.bootstrap import build_routing_service
+from .router.http_client import aclose_http_client, create_http_client, get_http_client, set_http_client
+from .router.logging_config import setup_logging
 from .router.schemas import RoutingConstraints, Tier
 from .router.service import RoutingService
 from .router.surface import RequestLimitError, ready_payload, validate_request_limits
@@ -14,12 +22,32 @@ mcp = MCPServer("dispatch-router")
 
 _service: RoutingService | None = None
 _startup_error: str | None = None
+_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_loop() -> asyncio.AbstractEventLoop:
+    """Persistent event loop so the shared AsyncClient stays bound to one loop."""
+    global _loop
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+    return _loop
+
+
+def _run(coro):
+    return _get_loop().run_until_complete(coro)
 
 
 def _ensure_service() -> None:
     global _service, _startup_error
-    if _service is None and _startup_error is None:
-        _service, _startup_error = build_routing_service(log_startup=True)
+    if _service is not None or _startup_error is not None:
+        return
+    setup_logging()
+    http_client = create_http_client()
+    set_http_client(http_client)
+    _service, _startup_error = _run(
+        build_routing_service(http_client=http_client, log_startup=True)
+    )
 
 
 def _service_or_error() -> RoutingService:
@@ -58,7 +86,7 @@ def ready() -> dict[str, Any]:
     _ensure_service()
     if _service is None:
         return {"ready": False, "error": _startup_error or "service unavailable"}
-    return ready_payload(_service)
+    return _run(ready_payload(_service, client=get_http_client()))
 
 
 @mcp.tool()
@@ -84,10 +112,13 @@ def route(
 
     if profile is not None and profile.is_passthrough:
         try:
-            decision = svc.decide_for_client(
-                prompt,
-                expects_structured_output=expects_structured_output,
-                profile=profile,
+            decision = _run(
+                svc.decide_for_client(
+                    prompt,
+                    client=get_http_client(),
+                    expects_structured_output=expects_structured_output,
+                    profile=profile,
+                )
             )
         except Exception as exc:
             return _tool_error(str(exc), category="classification_failed")
@@ -171,11 +202,13 @@ def complete(
         require_structured_output=expects_structured_output,
         require_tool_calling=require_tool_calling,
     )
-    route_result, execution = svc.complete(
-        prompt,
-        constraints,
-        max_output_tokens=max_output_tokens,
-        expects_structured_output=expects_structured_output,
+    route_result, execution = _run(
+        svc.complete(
+            prompt,
+            constraints,
+            max_output_tokens=max_output_tokens,
+            expects_structured_output=expects_structured_output,
+        )
     )
     decision = route_result.decision
     selected = execution.used_model or decision.selected_model
@@ -231,7 +264,7 @@ def refresh_models() -> dict[str, Any]:
         svc = _service_or_error()
     except RuntimeError as exc:
         return _tool_error(str(exc), category="service_unavailable")
-    refreshed = svc.model_registry.refresh()
+    refreshed = _run(svc.model_registry.refresh(client=get_http_client()))
     svc.model_registry = refreshed
     return {
         "ok": True,
@@ -250,8 +283,12 @@ def main() -> None:
     _ensure_service()
     if _service is None:
         raise SystemExit(f"dispatch-mcp failed to start: {_startup_error}")
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    finally:
+        _run(aclose_http_client())
 
 
 if __name__ == "__main__":
     main()
+

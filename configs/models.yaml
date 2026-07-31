@@ -1,8 +1,8 @@
-# Model registry — discovery-driven (not a hardcoded ID list).
+# Model registry for execute mode (chat demo / MCP / /v1 execute).
 #
-# At startup Dispatch fetches live catalogs from Groq + OpenRouter (demo)
-# or from the coding tool's upstream (passthrough), then auto-buckets into
-# cheap / mid / hard.
+# At startup Dispatch fetches live catalogs from Groq + OpenRouter, then
+# auto-buckets into cheap / mid / hard. Passthrough profiles discover from
+# their own upstream instead (see configs/clients.yaml).
 #
 # Set DISPATCH_DISCOVER=false to force fallback_models only (offline/tests).
 
@@ -11,7 +11,7 @@ source: discover  # discover | static
 discover:
   cache_ttl_seconds: 3600
   providers:
-    # Demo free-tier sources
+    # Execute-mode free-tier sources (demo profile)
     - name: groq
       provider: groq
       base_url: https://api.groq.com/openai/v1

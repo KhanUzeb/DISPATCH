@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dispatch · Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #14212b;
+      --ink-soft: #3d4f5c;
+      --muted: #6b7c89;
+      --paper: #f3f6f4;
+      --panel: rgba(255, 255, 255, 0.72);
+      --line: rgba(20, 33, 43, 0.1);
+      --accent: #1f6f5b;
+      --accent-deep: #145246;
+      --cheap: #2a7a4b;
+      --mid: #b06a16;
+      --hard: #9b3a3a;
+      --shadow: 0 18px 50px rgba(20, 33, 43, 0.08);
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Sora", sans-serif;
+      background:
+        radial-gradient(1200px 700px at 12% -10%, #d7ebe3 0%, transparent 55%),
+        radial-gradient(900px 600px at 100% 0%, #dfe7f2 0%, transparent 50%),
+        linear-gradient(165deg, #eef3f0 0%, #f7f5f1 48%, #e8eef4 100%);
+      background-attachment: fixed;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.35;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      min-height: 100%;
+      padding: 28px 18px 28px;
+      display: grid;
+      gap: 16px;
+      grid-template-rows: auto auto auto 1fr;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      animation: rise 520ms ease both;
+    }
+
+    .brand-block { display: grid; gap: 4px; }
+    .brand {
+      font-family: "Instrument Serif", serif;
+      font-size: clamp(2.2rem, 4.5vw, 3rem);
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+      margin: 0;
+    }
+    .brand em { font-style: italic; color: var(--accent-deep); }
+    .tagline {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding-bottom: 4px;
+    }
+    .nav a, .nav button {
+      appearance: none;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.7);
+      color: var(--ink-soft);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: 500 0.8rem "Sora", sans-serif;
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    .nav a:hover, .nav button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(31, 111, 91, 0.4);
+      color: var(--accent-deep);
+    }
+    .nav button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #b8c2c8;
+      box-shadow: 0 0 0 3px rgba(184, 194, 200, 0.25);
+    }
+    .dot.ok { background: var(--accent); box-shadow: 0 0 0 3px rgba(31, 111, 91, 0.18); }
+    .dot.bad { background: var(--hard); box-shadow: 0 0 0 3px rgba(155, 58, 58, 0.18); }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      animation: rise 620ms ease both;
+    }
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      padding: 14px 14px 12px;
+      display: grid;
+      gap: 4px;
+    }
+    .stat .label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .stat .value {
+      font-family: "Instrument Serif", serif;
+      font-size: 1.55rem;
+      line-height: 1.1;
+    }
+    .stat .value.cheap { color: var(--cheap); }
+    .stat .value.mid { color: var(--mid); }
+    .stat .value.hard { color: var(--hard); }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      animation: rise 700ms ease both;
+    }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .filters select, .filters input {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.75);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: 500 0.8rem "Sora", sans-serif;
+      color: var(--ink);
+      outline: none;
+    }
+    .filters select:focus, .filters input:focus {
+      border-color: rgba(31, 111, 91, 0.45);
+    }
+    .meta-line {
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) + 4px);
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      animation: rise 780ms ease both;
+      min-height: 420px;
+    }
+
+    .empty {
+      min-height: 420px;
+      display: grid;
+      place-content: center;
+      text-align: center;
+      gap: 8px;
+      padding: 32px;
+    }
+    .empty h2 {
+      margin: 0;
+      font-family: "Instrument Serif", serif;
+      font-weight: 400;
+      font-size: 1.8rem;
+    }
+    .empty p {
+      margin: 0;
+      color: var(--ink-soft);
+      max-width: 42ch;
+      line-height: 1.55;
+      font-size: 0.92rem;
+    }
+
+    .table-wrap { overflow: auto; max-height: calc(100vh - 320px); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: rgba(247, 250, 248, 0.96);
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      z-index: 1;
+    }
+    tr:hover td { background: rgba(31, 111, 91, 0.04); }
+    tr.error td { background: rgba(155, 58, 58, 0.05); }
+    .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; }
+    .muted { color: var(--muted); }
+    .tier {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .tier.cheap { color: var(--cheap); background: rgba(42, 122, 75, 0.12); }
+    .tier.mid { color: var(--mid); background: rgba(176, 106, 22, 0.12); }
+    .tier.hard { color: var(--hard); background: rgba(155, 58, 58, 0.12); }
+    .err {
+      color: var(--hard);
+      font-weight: 500;
+    }
+    .model {
+      max-width: 220px;
+      word-break: break-word;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    @media (max-width: 900px) {
+      .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+      .shell { padding: 18px 12px 18px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .table-wrap { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand-block">
+        <h1 class="brand">Dis<em>patch</em></h1>
+        <p class="tagline">Routing &amp; generation after each request</p>
+      </div>
+      <div class="nav">
+        <div class="status" id="status">
+          <span class="dot" id="statusDot"></span>
+          <span id="statusText">checking…</span>
+        </div>
+        <a href="/demo">Chat demo</a>
+        <button type="button" class="primary" id="refreshBtn">Refresh</button>
+      </div>
+    </header>
+
+    <section class="stats" id="stats">
+      <div class="stat"><span class="label">Events</span><span class="value" id="statTotal">0</span></div>
+      <div class="stat"><span class="label">Cheap</span><span class="value cheap" id="statCheap">0</span></div>
+      <div class="stat"><span class="label">Mid</span><span class="value mid" id="statMid">0</span></div>
+      <div class="stat"><span class="label">Hard</span><span class="value hard" id="statHard">0</span></div>
+      <div class="stat"><span class="label">Avg latency</span><span class="value" id="statLatency">—</span></div>
+      <div class="stat"><span class="label">Errors</span><span class="value" id="statErrors">0</span></div>
+    </section>
+
+    <div class="toolbar">
+      <div class="filters">
+        <select id="tierFilter">
+          <option value="all">All tiers</option>
+          <option value="cheap">cheap</option>
+          <option value="mid">mid</option>
+          <option value="hard">hard</option>
+        </select>
+        <select id="errorFilter">
+          <option value="all">All results</option>
+          <option value="ok">Succeeded</option>
+          <option value="error">Errors only</option>
+        </select>
+        <input id="apiKey" type="password" placeholder="API key (optional)" autocomplete="off" />
+        <label class="meta-line">
+          <input type="checkbox" id="autoRefresh" checked />
+          Auto-refresh
+        </label>
+      </div>
+      <div class="meta-line" id="updatedAt">No events yet</div>
+    </div>
+
+    <section class="panel">
+      <div class="empty" id="empty">
+        <h2>Nothing routed yet</h2>
+        <p>Send prompts from the chat demo or hit <span class="mono">/complete</span> / <span class="mono">/v1/chat/completions</span>. Decisions show up here after routing and generation.</p>
+      </div>
+      <div class="table-wrap" id="tableWrap" hidden>
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Tier</th>
+              <th>Route</th>
+              <th>Provider / model</th>
+              <th>Latency</th>
+              <th>Tokens</th>
+              <th>Cache</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const KEY = "dispatch.demo.apiKey";
+    const apiKeyInput = document.getElementById("apiKey");
+    const tierFilter = document.getElementById("tierFilter");
+    const errorFilter = document.getElementById("errorFilter");
+    const autoRefresh = document.getElementById("autoRefresh");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const empty = document.getElementById("empty");
+    const tableWrap = document.getElementById("tableWrap");
+    const tbody = document.getElementById("tbody");
+    const updatedAt = document.getElementById("updatedAt");
+
+    let events = [];
+    let timer = null;
+
+    apiKeyInput.value = localStorage.getItem(KEY) || "";
+    apiKeyInput.addEventListener("change", () => {
+      localStorage.setItem(KEY, apiKeyInput.value.trim());
+    });
+
+    function authHeaders() {
+      const key = apiKeyInput.value.trim();
+      return key ? { Authorization: `Bearer ${key}` } : {};
+    }
+
+    function fmtMs(v) {
+      if (v == null || Number.isNaN(Number(v))) return "—";
+      return Math.round(Number(v)) + " ms";
+    }
+
+    function fmtTime(ms) {
+      if (!ms) return "—";
+      const d = new Date(ms);
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function shortId(id) {
+      if (!id) return "—";
+      return id.length > 10 ? id.slice(0, 8) + "…" : id;
+    }
+
+    function computeStats(list) {
+      const total = list.length;
+      let cheap = 0, mid = 0, hard = 0, errors = 0, latencySum = 0, latencyN = 0;
+      for (const e of list) {
+        const tier = (e.tier || "").toLowerCase();
+        if (tier === "cheap") cheap++;
+        else if (tier === "mid") mid++;
+        else if (tier === "hard") hard++;
+        if (e.error_category) errors++;
+        if (e.total_latency_ms != null) {
+          latencySum += Number(e.total_latency_ms);
+          latencyN++;
+        }
+      }
+      document.getElementById("statTotal").textContent = String(total);
+      document.getElementById("statCheap").textContent = String(cheap);
+      document.getElementById("statMid").textContent = String(mid);
+      document.getElementById("statHard").textContent = String(hard);
+      document.getElementById("statErrors").textContent = String(errors);
+      document.getElementById("statLatency").textContent =
+        latencyN ? Math.round(latencySum / latencyN) + " ms" : "—";
+    }
+
+    function filtered() {
+      return events.filter((e) => {
+        const tier = (e.tier || "").toLowerCase();
+        if (tierFilter.value !== "all" && tier !== tierFilter.value) return false;
+        const isErr = Boolean(e.error_category);
+        if (errorFilter.value === "ok" && isErr) return false;
+        if (errorFilter.value === "error" && !isErr) return false;
+        return true;
+      });
+    }
+
+    function render() {
+      const list = filtered().slice().reverse();
+      computeStats(events);
+      if (!list.length) {
+        empty.hidden = false;
+        tableWrap.hidden = true;
+        empty.querySelector("h2").textContent = events.length ? "No matches" : "Nothing routed yet";
+        empty.querySelector("p").textContent = events.length
+          ? "Try clearing filters to see recent routing events."
+          : "Send prompts from the chat demo or hit /complete / /v1/chat/completions. Decisions show up here after routing and generation.";
+        return;
+      }
+      empty.hidden = true;
+      tableWrap.hidden = false;
+      tbody.innerHTML = list.map((e) => {
+        const tier = (e.tier || "—").toLowerCase();
+        const err = e.error_category;
+        const provider = e.selected_provider || "—";
+        const model = e.selected_model || "—";
+        const conf = e.route_confidence != null ? Number(e.route_confidence).toFixed(2) : "—";
+        return `
+          <tr class="${err ? "error" : ""}" title="request ${e.request_id || ""}">
+            <td class="mono">${fmtTime(e.created_at_ms)}<div class="muted">${shortId(e.request_id)}</div></td>
+            <td><span class="tier ${tier}">${tier}</span></td>
+            <td>${e.route || "—"}<div class="muted">conf ${conf}</div></td>
+            <td class="model">${provider}<div class="muted mono">${model}</div></td>
+            <td class="mono">
+              ${fmtMs(e.total_latency_ms)}
+              <div class="muted">c ${fmtMs(e.classification_latency_ms)} · p ${fmtMs(e.policy_latency_ms)} · g ${fmtMs(e.provider_latency_ms)}</div>
+            </td>
+            <td class="mono">${e.input_tokens ?? "—"} → ${e.output_tokens ?? "—"}</td>
+            <td>${e.cache_hit ? "hit" : "miss"}${e.fallback_attempts ? `<div class="muted">fb ${e.fallback_attempts}</div>` : ""}</td>
+            <td>${err ? `<span class="err">${err}</span>` : '<span class="muted">ok</span>'}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch("/ready");
+        const data = await res.json();
+        if (data.ready) {
+          statusDot.className = "dot ok";
+          statusText.textContent = [data.mode || "ready", data.profile].filter(Boolean).join(" · ");
+        } else {
+          statusDot.className = "dot bad";
+          statusText.textContent = data.error || "not ready";
+        }
+      } catch {
+        statusDot.className = "dot bad";
+        statusText.textContent = "offline";
+      }
+    }
+
+    async function loadEvents() {
+      try {
+        const res = await fetch("/telemetry/recent?limit=200", { headers: authHeaders() });
+        if (!res.ok) {
+          const detail = await res.json().catch(() => ({}));
+          statusDot.className = "dot bad";
+          statusText.textContent = detail.detail?.message || `HTTP ${res.status}`;
+          return;
+        }
+        const data = await res.json();
+        events = Array.isArray(data.events) ? data.events : [];
+        updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()} · ${events.length} stored`;
+        render();
+      } catch {
+        statusDot.className = "dot bad";
+        statusText.textContent = "offline";
+      }
+    }
+
+    function schedule() {
+      if (timer) clearInterval(timer);
+      if (autoRefresh.checked) {
+        timer = setInterval(() => {
+          refreshStatus();
+          loadEvents();
+        }, 4000);
+      }
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", () => {
+      refreshStatus();
+      loadEvents();
+    });
+    tierFilter.addEventListener("change", render);
+    errorFilter.addEventListener("change", render);
+    autoRefresh.addEventListener("change", schedule);
+
+    refreshStatus();
+    loadEvents();
+    schedule();
+  </script>
+</body>
+</html>

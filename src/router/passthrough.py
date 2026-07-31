@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -18,7 +18,7 @@ class PassthroughResult:
     status_code: int
     headers: dict[str, str]
     body: bytes | None
-    stream: Iterator[bytes] | None
+    stream: AsyncIterator[bytes] | None
     selected_model: str
     tier: Tier
     latency_ms: float
@@ -51,7 +51,7 @@ def resolve_auth_headers(
     incoming_auth_token: str | None,
     protocol: str,
 ) -> dict[str, str]:
-    """Prefer profile static key; else forward what the coding tool sent."""
+    """Prefer profile static key; else forward what the client sent."""
     headers: dict[str, str] = {}
     static = (profile.upstream_api_key or "").strip()
 
@@ -94,60 +94,46 @@ def has_upstream_credentials(auth_headers: dict[str, str], *, protocol: str) -> 
     return auth.lower().startswith("bearer ") and len(auth) > len("Bearer ")
 
 
-def forward_openai_chat(
+async def _forward(
     *,
-    profile: ClientProfile,
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout_s: float,
     selected_model: str,
-    payload: dict[str, Any],
-    auth_headers: dict[str, str],
-    timeout_s: float = 120.0,
     request_id: str,
     tier: Tier,
 ) -> PassthroughResult:
-    if not profile.upstream_base_url:
-        raise ValueError(
-            "Passthrough profile missing upstream_base_url "
-            "(set DISPATCH_UPSTREAM_BASE_URL or clients.yaml)"
-        )
-
-    body = dict(payload)
-    body["model"] = selected_model
-    url = _openai_chat_url(profile.upstream_base_url)
-    headers = {
-        "Content-Type": "application/json",
-        **auth_headers,
-    }
     stream = bool(body.get("stream"))
     started = time.perf_counter()
+    content = json.dumps(body)
 
     if stream:
-        client = httpx.Client(timeout=timeout_s)
-        req = client.build_request("POST", url, headers=headers, content=json.dumps(body))
-        response = client.send(req, stream=True)
+        req = client.build_request("POST", url, headers=headers, content=content, timeout=timeout_s)
+        response = await client.send(req, stream=True)
         latency_ms = (time.perf_counter() - started) * 1000.0
 
-        def _iter() -> Iterator[bytes]:
+        async def _aiter() -> AsyncIterator[bytes]:
             try:
-                for chunk in response.iter_bytes():
+                async for chunk in response.aiter_bytes():
                     if chunk:
                         yield chunk
             finally:
-                response.close()
-                client.close()
+                await response.aclose()
 
         return PassthroughResult(
             status_code=response.status_code,
             headers={k: v for k, v in response.headers.items()},
             body=None,
-            stream=_iter(),
+            stream=_aiter(),
             selected_model=selected_model,
             tier=tier,
             latency_ms=latency_ms,
             request_id=request_id,
         )
 
-    with httpx.Client(timeout=timeout_s) as client:
-        response = client.post(url, headers=headers, content=json.dumps(body))
+    response = await client.post(url, headers=headers, content=content, timeout=timeout_s)
     latency_ms = (time.perf_counter() - started) * 1000.0
     return PassthroughResult(
         status_code=response.status_code,
@@ -161,12 +147,13 @@ def forward_openai_chat(
     )
 
 
-def forward_anthropic_messages(
+async def forward_openai_chat(
     *,
     profile: ClientProfile,
     selected_model: str,
     payload: dict[str, Any],
     auth_headers: dict[str, str],
+    client: httpx.AsyncClient,
     timeout_s: float = 120.0,
     request_id: str,
     tier: Tier,
@@ -179,52 +166,46 @@ def forward_anthropic_messages(
 
     body = dict(payload)
     body["model"] = selected_model
-    url = _anthropic_messages_url(profile.upstream_base_url)
-    headers = {
-        "Content-Type": "application/json",
-        **auth_headers,
-    }
-    stream = bool(body.get("stream"))
-    started = time.perf_counter()
+    return await _forward(
+        client=client,
+        url=_openai_chat_url(profile.upstream_base_url),
+        headers={"Content-Type": "application/json", **auth_headers},
+        body=body,
+        timeout_s=timeout_s,
+        selected_model=selected_model,
+        request_id=request_id,
+        tier=tier,
+    )
 
-    if stream:
-        client = httpx.Client(timeout=timeout_s)
-        req = client.build_request("POST", url, headers=headers, content=json.dumps(body))
-        response = client.send(req, stream=True)
-        latency_ms = (time.perf_counter() - started) * 1000.0
 
-        def _iter() -> Iterator[bytes]:
-            try:
-                for chunk in response.iter_bytes():
-                    if chunk:
-                        yield chunk
-            finally:
-                response.close()
-                client.close()
-
-        return PassthroughResult(
-            status_code=response.status_code,
-            headers={k: v for k, v in response.headers.items()},
-            body=None,
-            stream=_iter(),
-            selected_model=selected_model,
-            tier=tier,
-            latency_ms=latency_ms,
-            request_id=request_id,
+async def forward_anthropic_messages(
+    *,
+    profile: ClientProfile,
+    selected_model: str,
+    payload: dict[str, Any],
+    auth_headers: dict[str, str],
+    client: httpx.AsyncClient,
+    timeout_s: float = 120.0,
+    request_id: str,
+    tier: Tier,
+) -> PassthroughResult:
+    if not profile.upstream_base_url:
+        raise ValueError(
+            "Passthrough profile missing upstream_base_url "
+            "(set DISPATCH_UPSTREAM_BASE_URL or clients.yaml)"
         )
 
-    with httpx.Client(timeout=timeout_s) as client:
-        response = client.post(url, headers=headers, content=json.dumps(body))
-    latency_ms = (time.perf_counter() - started) * 1000.0
-    return PassthroughResult(
-        status_code=response.status_code,
-        headers={k: v for k, v in response.headers.items()},
-        body=response.content,
-        stream=None,
+    body = dict(payload)
+    body["model"] = selected_model
+    return await _forward(
+        client=client,
+        url=_anthropic_messages_url(profile.upstream_base_url),
+        headers={"Content-Type": "application/json", **auth_headers},
+        body=body,
+        timeout_s=timeout_s,
         selected_model=selected_model,
-        tier=tier,
-        latency_ms=latency_ms,
         request_id=request_id,
+        tier=tier,
     )
 
 
@@ -244,4 +225,3 @@ def dispatch_headers(
         "X-Dispatch-Mode": "passthrough",
         "X-Dispatch-Cache-Hit": "1" if cache_hit else "0",
     }
-

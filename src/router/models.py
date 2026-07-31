@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
 from .discover import (
@@ -41,10 +42,10 @@ class ModelRegistry:
     def tier_representatives(self) -> dict[str, str]:
         return pick_tier_representatives(self.enabled_models())
 
-    def refresh(self) -> "ModelRegistry":
+    async def refresh(self, *, client: httpx.AsyncClient) -> "ModelRegistry":
         if self.discover_config is None:
             return self
-        cache = discover_models(self.discover_config)
+        cache = await discover_models(self.discover_config, client=client)
         return ModelRegistry(
             models=cache.specs,
             version=cache.version,
@@ -110,7 +111,12 @@ def _version_for(models: list[ModelSpec]) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
-def load_model_registry(path: str | Path, *, discover: bool | None = None) -> ModelRegistry:
+async def load_model_registry(
+    path: str | Path,
+    *,
+    client: httpx.AsyncClient | None = None,
+    discover: bool | None = None,
+) -> ModelRegistry:
     """Load registry from models.yaml — prefers live discovery over static IDs."""
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -128,8 +134,13 @@ def load_model_registry(path: str | Path, *, discover: bool | None = None) -> Mo
     fallback = raw.get("fallback_models") if isinstance(raw.get("fallback_models"), list) else None
 
     if discover_cfg.enabled:
+        if client is None:
+            raise ModelRegistryError(
+                "Live model discovery requires a shared httpx.AsyncClient "
+                "(pass client= from FastAPI lifespan / MCP startup)"
+            )
         try:
-            cache: DiscoveryCache = discover_models(discover_cfg)
+            cache: DiscoveryCache = await discover_models(discover_cfg, client=client)
             return ModelRegistry(
                 models=cache.specs,
                 version=cache.version,

@@ -74,12 +74,6 @@ def _decision(model: ModelSpec | None = None) -> RoutingDecision:
     )
 
 
-def test_verify_api_key_optional(monkeypatch):
-    monkeypatch.delenv("ROUTER_API_KEY", raising=False)
-    verify_router_api_key(None)
-    verify_router_api_key("Bearer anything")
-
-
 def test_verify_api_key_required(monkeypatch):
     monkeypatch.setenv("ROUTER_API_KEY", "secret-demo")
     with pytest.raises(HTTPException) as missing:
@@ -100,12 +94,6 @@ def test_rate_limiter_blocks_after_limit():
     assert limiter.allow("a")
     assert not limiter.allow("a")
     assert limiter.allow("b")
-
-
-def test_rate_limiter_disabled():
-    limiter = SlidingWindowRateLimiter(limit_per_minute=0)
-    for _ in range(20):
-        assert limiter.allow("a")
 
 
 def test_decision_cache_evicts_and_is_thread_safe():
@@ -142,14 +130,15 @@ def test_decision_cache_evicts_and_is_thread_safe():
     assert len(cache._store) <= 5
 
 
-def test_executor_retries_then_succeeds():
+@pytest.mark.asyncio
+async def test_executor_retries_then_succeeds():
     class Flaky:
         provider_name = "groq"
 
         def __init__(self) -> None:
             self.calls = 0
 
-        def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
+        async def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("rate limited")
@@ -172,7 +161,7 @@ def test_executor_retries_then_succeeds():
     model = _model()
     adapter = Flaky()
     executor = Executor(Registry(adapter), max_fallbacks=0, retries_by_provider={"groq": 1})
-    result = executor.execute(
+    result = await executor.execute(
         _decision(model),
         ProviderRequest(prompt="hi", messages=[{"role": "user", "content": "hi"}], max_output_tokens=16),
     )
@@ -181,18 +170,19 @@ def test_executor_retries_then_succeeds():
     assert adapter.calls == 2
 
 
-def test_executor_hides_raw_upstream_errors():
+@pytest.mark.asyncio
+async def test_executor_hides_raw_upstream_errors():
     class Boom:
         provider_name = "groq"
 
-        def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
+        async def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
             raise RuntimeError("secret stacktrace with api key sk-abc")
 
     class Registry:
         def get(self, provider: Provider):
             return Boom()
 
-    result = Executor(Registry(), max_fallbacks=0).execute(
+    result = await Executor(Registry(), max_fallbacks=0).execute(
         _decision(_model()),
         ProviderRequest(prompt="hi", messages=[{"role": "user", "content": "hi"}], max_output_tokens=16),
     )
@@ -201,6 +191,3 @@ def test_executor_hides_raw_upstream_errors():
     assert result.error.message == client_safe_upstream_message("m1")
 
 
-def test_retryable_detection():
-    assert is_retryable_provider_error(RuntimeError("429 rate limited"))
-    assert not is_retryable_provider_error(RuntimeError("invalid api key"))

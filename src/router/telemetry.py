@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .schemas import RoutingDecision, to_dict
+from .logging_config import reset_request_id, set_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +58,14 @@ class LoggingTelemetry:
     REDACTED_KEYS = {"prompt", "api_key", "authorization", "token", "secret"}
 
     def emit(self, event: RoutingTelemetryEvent) -> None:
-        payload = to_dict(event)
-        if payload.get("decision") is not None:
-            payload["decision"] = self._redact(payload["decision"])
-        logger.info("routing_decision_event=%s", payload)
+        token = set_request_id(event.request_id)
+        try:
+            payload = to_dict(event)
+            if payload.get("decision") is not None:
+                payload["decision"] = self._redact(payload["decision"])
+            logger.info("routing_decision_event=%s", payload)
+        finally:
+            reset_request_id(token)
 
     def _redact(self, obj):
         if isinstance(obj, dict):

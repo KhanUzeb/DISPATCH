@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 
 from .base import ProviderAdapter
 from ..schemas import Provider, ProviderRequest, ProviderResponse
@@ -21,15 +22,15 @@ class GroqAdapter(ProviderAdapter):
             return self._client
         if not self.api_key:
             raise RuntimeError("Missing GROQ_API_KEY")
-        from groq import Groq
+        from groq import AsyncGroq
 
-        self._client = Groq(api_key=self.api_key, timeout=self.timeout_ms / 1000.0)
+        self._client = AsyncGroq(api_key=self.api_key, timeout=self.timeout_ms / 1000.0)
         return self._client
 
-    def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
+    async def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
         start = time.perf_counter()
         client = self._get_client()
-        resp = client.chat.completions.create(
+        resp = await client.chat.completions.create(
             model=model_id,
             messages=request.messages,
             temperature=request.temperature,
@@ -46,3 +47,28 @@ class GroqAdapter(ProviderAdapter):
             provider=Provider.GROQ,
             provider_request_id=getattr(resp, "id", None),
         )
+
+    async def stream(self, model_id: str, request: ProviderRequest) -> AsyncIterator[str]:
+        client = self._get_client()
+        stream = await client.chat.completions.create(
+            model=model_id,
+            messages=request.messages,
+            temperature=request.temperature,
+            max_tokens=request.max_output_tokens,
+            stream=True,
+        )
+        try:
+            async for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None) if delta is not None else None
+                if content:
+                    yield content
+        finally:
+            close = getattr(stream, "close", None) or getattr(stream, "aclose", None)
+            if close is not None:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result

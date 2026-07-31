@@ -1,19 +1,29 @@
-# Client profiles — use Dispatch as a *router*, not as a model provider.
+# Client profiles for Dispatch's three surfaces:
+#   chat demo (/demo) · MCP (dispatch-mcp) · OpenAI/Anthropic HTTP (/v1/*)
 #
 # Mode:
-#   execute     — Dispatch calls its own providers (discovered Groq/OpenRouter free)
-#   passthrough — Dispatch classifies, picks a model from YOUR tool/upstream, forwards
+#   execute     — Dispatch calls its own providers (Groq/OpenRouter free via discovery)
+#   passthrough — Classify, map tier → YOUR upstream model, forward the request
 #
-# Models are NOT hardcoded. With discover_models: true, Dispatch fetches
-# GET {upstream}/models (or OpenRouter catalog) and auto-maps cheap/mid/hard.
-# Optional DISPATCH_MODEL_* env vars still override a tier.
-#
-# DISPATCH_PROFILE / DISPATCH_MODE env vars override active profile / mode.
+# With discover_models: true, Dispatch fetches GET {upstream}/models (or the
+# OpenRouter catalog) and auto-maps cheap/mid/hard. DISPATCH_MODEL_* overrides
+# a tier. DISPATCH_PROFILE / DISPATCH_MODE override active profile / mode.
 
 active_profile: demo
 
 profiles:
-  # Generic OpenAI-compatible passthrough profile.
+  # Chat demo, MCP, and execute-mode /v1/chat/completions.
+  demo:
+    mode: execute
+    protocol: openai
+    upstream_base_url: ""
+    upstream_api_key: ""
+    discover_models: true
+    free_only: true
+    models: {cheap: "", mid: "", hard: ""}
+    fallbacks: {cheap: [], mid: [], hard: []}
+
+  # OpenAI-compatible passthrough (/v1/chat/completions → your upstream).
   default:
     mode: passthrough
     protocol: openai
@@ -24,24 +34,13 @@ profiles:
     models: {cheap: "", mid: "", hard: ""}
     fallbacks: {cheap: [], mid: [], hard: []}
 
-  # Anthropic passthrough profile for /v1/messages.
-  claude-code:
+  # Anthropic Messages passthrough (/v1/messages → Anthropic or gateway).
+  anthropic:
     mode: passthrough
     protocol: anthropic
     upstream_base_url: https://api.anthropic.com
     upstream_api_key: ""
     discover_models: true
     free_only: false
-    models: {cheap: "", mid: "", hard: ""}
-    fallbacks: {cheap: [], mid: [], hard: []}
-
-  # Local execute mode: Dispatch runs discovered free-tier models itself.
-  demo:
-    mode: execute
-    protocol: openai
-    upstream_base_url: ""
-    upstream_api_key: ""
-    discover_models: true
-    free_only: true
     models: {cheap: "", mid: "", hard: ""}
     fallbacks: {cheap: [], mid: [], hard: []}

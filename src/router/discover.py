@@ -1,4 +1,4 @@
-"""Live model discovery from providers and coding-tool upstreams.
+"""Live model discovery from providers and passthrough upstreams.
 
 models.yaml no longer hardcodes model IDs. At startup (and on refresh) we
 fetch `/v1/models` (or OpenRouter's richer catalog) and bucket into
@@ -250,20 +250,7 @@ def _openrouter_supports_tools(row: dict[str, Any]) -> bool:
     return True
 
 
-def fetch_openrouter_models(
-    *,
-    base_url: str,
-    api_key: str,
-    free_only: bool = True,
-    timeout_s: float = 20.0,
-) -> list[DiscoveredModel]:
-    url = base_url.rstrip("/") + "/models"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    with httpx.Client(timeout=timeout_s) as client:
-        resp = client.get(url, headers=headers)
-        resp.raise_for_status()
-        payload = resp.json()
-    rows = payload.get("data") or []
+def _parse_openrouter_rows(rows: list[Any], *, free_only: bool) -> list[DiscoveredModel]:
     out: list[DiscoveredModel] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -296,22 +283,13 @@ def fetch_openrouter_models(
     return out
 
 
-def fetch_openai_compatible_models(
+def _parse_openai_compatible_rows(
+    rows: list[Any],
     *,
-    base_url: str,
-    api_key: str,
     provider: Provider,
-    free_only: bool = False,
-    prefer_suffix: str = "",
-    timeout_s: float = 20.0,
+    free_only: bool,
+    prefer_suffix: str,
 ) -> list[DiscoveredModel]:
-    url = base_url.rstrip("/") + "/models"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    with httpx.Client(timeout=timeout_s) as client:
-        resp = client.get(url, headers=headers)
-        resp.raise_for_status()
-        payload = resp.json()
-    rows = payload.get("data") or []
     out: list[DiscoveredModel] = []
     for row in rows:
         if isinstance(row, str):
@@ -352,13 +330,58 @@ def fetch_openai_compatible_models(
     return out
 
 
-def fetch_from_source(source: DiscoverSource, *, api_key: str | None = None) -> list[DiscoveredModel]:
+async def fetch_openrouter_models(
+    *,
+    client: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    free_only: bool = True,
+    timeout_s: float = 20.0,
+) -> list[DiscoveredModel]:
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    resp = await client.get(url, headers=headers, timeout=timeout_s)
+    resp.raise_for_status()
+    payload = resp.json()
+    return _parse_openrouter_rows(payload.get("data") or [], free_only=free_only)
+
+
+async def fetch_openai_compatible_models(
+    *,
+    client: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    provider: Provider,
+    free_only: bool = False,
+    prefer_suffix: str = "",
+    timeout_s: float = 20.0,
+) -> list[DiscoveredModel]:
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    resp = await client.get(url, headers=headers, timeout=timeout_s)
+    resp.raise_for_status()
+    payload = resp.json()
+    return _parse_openai_compatible_rows(
+        payload.get("data") or [],
+        provider=provider,
+        free_only=free_only,
+        prefer_suffix=prefer_suffix,
+    )
+
+
+async def fetch_from_source(
+    source: DiscoverSource,
+    *,
+    client: httpx.AsyncClient,
+    api_key: str | None = None,
+) -> list[DiscoveredModel]:
     if not source.enabled:
         return []
     key = (api_key if api_key is not None else os.environ.get(source.api_key_env, "")).strip()
     # OpenRouter models catalog is public; Groq usually needs a key.
     if source.provider == Provider.OPENROUTER:
-        return fetch_openrouter_models(
+        return await fetch_openrouter_models(
+            client=client,
             base_url=source.base_url,
             api_key=key,
             free_only=source.free_only,
@@ -366,7 +389,8 @@ def fetch_from_source(source: DiscoverSource, *, api_key: str | None = None) -> 
     if not key and source.provider not in {Provider.OLLAMA}:
         logger.warning("Skipping discover source %s — missing %s", source.name, source.api_key_env)
         return []
-    return fetch_openai_compatible_models(
+    return await fetch_openai_compatible_models(
+        client=client,
         base_url=source.base_url,
         api_key=key,
         provider=source.provider,
@@ -561,7 +585,12 @@ class DiscoveryCache:
     source: str  # discover | fallback
 
 
-def discover_models(config: DiscoverConfig, *, api_keys: dict[str, str] | None = None) -> DiscoveryCache:
+async def discover_models(
+    config: DiscoverConfig,
+    *,
+    client: httpx.AsyncClient,
+    api_keys: dict[str, str] | None = None,
+) -> DiscoveryCache:
     """Fetch live catalogs and build ModelSpecs. Falls back to YAML on failure."""
     api_keys = api_keys or {}
     discovered: list[DiscoveredModel] = []
@@ -571,7 +600,7 @@ def discover_models(config: DiscoverConfig, *, api_keys: dict[str, str] | None =
         for source in config.sources:
             try:
                 key = api_keys.get(source.api_key_env) or os.environ.get(source.api_key_env, "")
-                batch = fetch_from_source(source, api_key=key)
+                batch = await fetch_from_source(source, client=client, api_key=key)
                 logger.info("Discovered %d models from %s", len(batch), source.name)
                 discovered.extend(batch)
             except Exception as exc:
@@ -649,8 +678,9 @@ def _fallback_specs(rows: list[dict[str, Any]]) -> list[ModelSpec]:
     return specs
 
 
-def discover_for_upstream(
+async def discover_for_upstream(
     *,
+    client: httpx.AsyncClient,
     base_url: str,
     api_key: str,
     protocol: str = "openai",
@@ -658,7 +688,7 @@ def discover_for_upstream(
     tiering: TieringConfig | None = None,
     provider: Provider = Provider.OPENAI_COMPATIBLE,
 ) -> dict[str, str]:
-    """Fetch models from a coding tool's upstream and pick tier representatives."""
+    """Fetch models from a passthrough upstream and pick tier representatives."""
     tiering = tiering or TieringConfig(prefer_free=free_only)
     if protocol == "anthropic":
         # Anthropic has no public models list without auth nuances — use hints catalog.
@@ -671,9 +701,12 @@ def discover_for_upstream(
         return pick_tier_representatives(specs)
 
     if "openrouter.ai" in base_url:
-        models = fetch_openrouter_models(base_url=base_url, api_key=api_key, free_only=free_only)
+        models = await fetch_openrouter_models(
+            client=client, base_url=base_url, api_key=api_key, free_only=free_only
+        )
     else:
-        models = fetch_openai_compatible_models(
+        models = await fetch_openai_compatible_models(
+            client=client,
             base_url=base_url,
             api_key=api_key,
             provider=provider,

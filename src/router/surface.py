@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+
 from .service import RoutingService
 
 
@@ -27,7 +29,7 @@ def validate_request_limits(
         raise RequestLimitError("max_output_tokens exceeds configured maximum")
 
 
-def ready_payload(svc: RoutingService) -> dict[str, Any]:
+async def ready_payload(svc: RoutingService, *, client: httpx.AsyncClient) -> dict[str, Any]:
     profile = svc.active_profile
     registry = svc.model_registry
     payload: dict[str, Any] = {
@@ -50,7 +52,10 @@ def ready_payload(svc: RoutingService) -> dict[str, Any]:
         payload["protocol"] = profile.protocol
         if profile.is_passthrough:
             try:
-                profile.ensure_models(api_key=profile.upstream_api_key or None)
+                await profile.ensure_models(
+                    client=client,
+                    api_key=profile.upstream_api_key or None,
+                )
             except Exception as exc:
                 payload["discover_error"] = str(exc)
             payload["tier_models"] = dict(profile.models)

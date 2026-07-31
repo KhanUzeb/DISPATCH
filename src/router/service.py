@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+
+import httpx
 
 from .cache import DecisionCacheKey, InMemoryDecisionCache
 from .classifier import Classifier
 from .clients import ClientConfig, ClientProfile
 from .config import RouterRuntimeConfig
 from .executor import ExecutionResult, Executor
+from .logging_config import set_request_id
 from .models import ModelRegistry
 from .policy import route
 from .schemas import ClassificationResult, ProviderRequest, RoutingConstraints, RoutingDecision, Tier
@@ -62,6 +66,7 @@ class RoutingService:
 
     def decide(self, prompt: str, constraints: RoutingConstraints, expects_structured_output: bool) -> RouteResponse:
         request_id = str(uuid.uuid4())
+        set_request_id(request_id)
         key = DecisionCacheKey(
             namespace="default",
             prompt=prompt,
@@ -112,23 +117,28 @@ class RoutingService:
             policy_latency_ms=policy_latency_ms,
         )
 
-    def decide_for_client(
+    async def decide_for_client(
         self,
         prompt: str,
         *,
+        client: httpx.AsyncClient,
         expects_structured_output: bool = False,
         profile: ClientProfile | None = None,
         upstream_api_key: str | None = None,
     ) -> ClientRouteDecision:
-        """Classify and map tier → the coding tool's own model id (no provider call)."""
+        """Classify and map tier → the upstream's model id (no provider call)."""
         active = profile or self.active_profile
         if active is None:
             raise RuntimeError("No client profile configured")
 
-        # Resolve tier models from the tool upstream when not hardcoded.
-        active.ensure_models(api_key=upstream_api_key or active.upstream_api_key)
+        # Resolve tier models from the upstream when not hardcoded.
+        await active.ensure_models(
+            client=client,
+            api_key=upstream_api_key or active.upstream_api_key,
+        )
 
         request_id = str(uuid.uuid4())
+        set_request_id(request_id)
         cache_key = DecisionCacheKey(
             namespace=f"client:{active.name}:{active.models.get('cheap')}:{active.models.get('mid')}:{active.models.get('hard')}",
             prompt=prompt,
@@ -176,7 +186,25 @@ class RoutingService:
         self.decision_cache.set(cache_key, decision)
         return decision
 
-    def complete(
+    def _provider_request(
+        self,
+        prompt: str,
+        constraints: RoutingConstraints,
+        max_output_tokens: int,
+        messages: list[dict[str, str]] | None,
+        temperature: float,
+    ) -> ProviderRequest:
+        normalized_messages = messages or [{"role": "user", "content": prompt}]
+        return ProviderRequest(
+            prompt=prompt,
+            messages=normalized_messages,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            structured_output=constraints.require_structured_output,
+            tool_calling=constraints.require_tool_calling,
+        )
+
+    async def complete(
         self,
         prompt: str,
         constraints: RoutingConstraints,
@@ -186,14 +214,26 @@ class RoutingService:
         temperature: float = 0.0,
     ) -> tuple[RouteResponse, ExecutionResult]:
         route_response = self.decide(prompt, constraints, expects_structured_output=expects_structured_output)
-        normalized_messages = messages or [{"role": "user", "content": prompt}]
-        provider_request = ProviderRequest(
-            prompt=prompt,
-            messages=normalized_messages,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-            structured_output=constraints.require_structured_output,
-            tool_calling=constraints.require_tool_calling,
+        provider_request = self._provider_request(
+            prompt, constraints, max_output_tokens, messages, temperature
         )
-        execution = self.executor.execute(route_response.decision, provider_request)
+        execution = await self.executor.execute(route_response.decision, provider_request)
         return route_response, execution
+
+    async def complete_stream(
+        self,
+        prompt: str,
+        constraints: RoutingConstraints,
+        max_output_tokens: int,
+        expects_structured_output: bool,
+        messages: list[dict[str, str]] | None = None,
+        temperature: float = 0.0,
+    ) -> tuple[RouteResponse, ExecutionResult, AsyncIterator[str] | None]:
+        route_response = self.decide(prompt, constraints, expects_structured_output=expects_structured_output)
+        provider_request = self._provider_request(
+            prompt, constraints, max_output_tokens, messages, temperature
+        )
+        execution, deltas = await self.executor.execute_stream(
+            route_response.decision, provider_request
+        )
+        return route_response, execution, deltas

@@ -4,6 +4,11 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 .dispatch_metrics.jsonl
 .dispatch_metrics.tmp
 .vscode/settings.json

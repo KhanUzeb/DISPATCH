@@ -1,27 +1,27 @@
-"""Client profiles for universal router / passthrough mode.
+"""Client profiles for execute and passthrough modes.
 
-Coding tools (OpenCode, Codex, Claude Code, Cursor) point at Dispatch as a
-router. Dispatch classifies the prompt into cheap/mid/hard, maps that tier to
-a model discovered from the tool's upstream (or DISPATCH_MODEL_* overrides),
-and forwards the request.
+Dispatch classifies the prompt into cheap/mid/hard, maps that tier to a model
+(from its own registry in execute mode, or from the upstream / DISPATCH_MODEL_*
+overrides in passthrough), then either executes or forwards the request.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
 from .discover import TieringConfig, discover_for_upstream
 from .schemas import Provider, Tier
 
 logger = logging.getLogger(__name__)
-_ENSURE_MODELS_LOCK = threading.Lock()
+_ENSURE_MODELS_LOCK = asyncio.Lock()
 
 
 class ClientConfigError(RuntimeError):
@@ -55,11 +55,16 @@ class ClientProfile:
     def has_all_tier_models(self) -> bool:
         return all((self.models.get(t) or "").strip() for t in ("cheap", "mid", "hard"))
 
-    def ensure_models(self, *, api_key: str | None = None) -> None:
-        """Fetch tier models from the tool upstream when not already set."""
+    async def ensure_models(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        api_key: str | None = None,
+    ) -> None:
+        """Fetch tier models from the upstream when not already set."""
         if self.has_all_tier_models():
             return
-        with _ENSURE_MODELS_LOCK:
+        async with _ENSURE_MODELS_LOCK:
             # Re-check under lock to avoid duplicate concurrent discovery.
             if self.has_all_tier_models():
                 return
@@ -75,11 +80,16 @@ class ClientProfile:
                     f"Profile '{self.name}' needs upstream_base_url to discover models"
                 )
             key = (api_key or self.upstream_api_key or "").strip()
-            provider = Provider.OPENROUTER if "openrouter.ai" in self.upstream_base_url else Provider.OPENAI_COMPATIBLE
+            provider = (
+                Provider.OPENROUTER
+                if "openrouter.ai" in (self.upstream_base_url or "")
+                else Provider.OPENAI_COMPATIBLE
+            )
             if self.protocol == "anthropic":
                 provider = Provider.ANTHROPIC
             try:
-                picked = discover_for_upstream(
+                picked = await discover_for_upstream(
+                    client=client,
                     base_url=self.upstream_base_url or "https://api.anthropic.com",
                     api_key=key,
                     protocol=self.protocol,
@@ -188,7 +198,7 @@ def _parse_profile(name: str, raw: dict[str, Any]) -> ClientProfile:
 
 
 def _apply_env_overrides(profile: ClientProfile) -> ClientProfile:
-    """Env wins over YAML so installers can configure without editing files."""
+    """Env wins over YAML so deploys can configure without editing files."""
     mode = (os.environ.get("DISPATCH_MODE") or profile.mode).strip().lower()
     if mode not in {"passthrough", "execute"}:
         mode = profile.mode
@@ -197,13 +207,9 @@ def _apply_env_overrides(profile: ClientProfile) -> ClientProfile:
         os.environ.get("DISPATCH_UPSTREAM_BASE_URL")
         or profile.upstream_base_url
     )
-    # Ignore loopback OPENAI_BASE_URL — that points at Dispatch itself.
-    env_openai = os.environ.get("OPENAI_BASE_URL", "")
-    if env_openai and "localhost:8000" not in env_openai and "127.0.0.1:8000" not in env_openai:
-        if not os.environ.get("DISPATCH_UPSTREAM_BASE_URL"):
-            # Only use OPENAI_BASE_URL as upstream when explicitly not Dispatch.
-            pass
-
+    # OPENAI_BASE_URL is the execute-mode OpenAI provider URL (see .env.example),
+    # not a passthrough upstream. Reject loopback DISPATCH_UPSTREAM_BASE_URL
+    # (that would point at Dispatch itself).
     if upstream and ("localhost:8000" in upstream or "127.0.0.1:8000" in upstream):
         upstream = profile.upstream_base_url
 

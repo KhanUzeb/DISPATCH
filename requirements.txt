@@ -1,5 +1,6 @@
 # Prefer: uv pip install -e ".[dev]"
-# This file mirrors pyproject.toml for environments that expect requirements.txt.
+# Mirrors pyproject.toml for environments that expect requirements.txt.
+# Core: FastAPI chat demo + /v1 proxies; mcp for dispatch-mcp.
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
@@ -7,7 +8,9 @@ python-dotenv>=1.0.1
 pyyaml>=6.0.1
 numpy>=1.26.0
 requests>=2.32.0
+httpx>=0.27.0
 groq>=0.9.0
 mcp
 pytest>=8.0.0
-httpx>=0.27.0
+pytest-asyncio>=0.24.0
+pytest-cov>=5.0.0

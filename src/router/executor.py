@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import re
-import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from .providers.registry import ProviderRegistry
@@ -90,26 +91,33 @@ class Executor:
                 break
         return ordered
 
-    def _execute_with_retries(self, model: ModelSpec, request: ProviderRequest):
+    def _get_adapter(self, model: ModelSpec):
         adapter = self.provider_registry.get(model.provider)
         if adapter is None:
             raise LookupError(f"Provider {model.provider.value} is not configured")
+        return adapter
+
+    async def _execute_with_retries(self, model: ModelSpec, request: ProviderRequest):
+        adapter = self._get_adapter(model)
 
         retries = max(0, int(self.retries_by_provider.get(model.provider.value, 0)))
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
             try:
-                return adapter.execute(model.provider_model_id, request)
+                return await adapter.execute(model.provider_model_id, request)
             except Exception as exc:
                 last_exc = exc
                 if attempt < retries and is_retryable_provider_error(exc):
-                    time.sleep(0.25 * (attempt + 1))
+                    await asyncio.sleep(0.25 * (attempt + 1))
                     continue
                 raise
         assert last_exc is not None
         raise last_exc
 
-    def execute(self, decision: RoutingDecision, request: ProviderRequest) -> ExecutionResult:
+    def _open_stream(self, model: ModelSpec, request: ProviderRequest) -> AsyncIterator[str]:
+        return self._get_adapter(model).stream(model.provider_model_id, request)
+
+    async def execute(self, decision: RoutingDecision, request: ProviderRequest) -> ExecutionResult:
         if decision.selected_model is None:
             return ExecutionResult(
                 response=None,
@@ -124,7 +132,7 @@ class Executor:
         last_error: RoutingError | None = None
         for model in self._fallback_models(decision):
             try:
-                provider_response = self._execute_with_retries(model, request)
+                provider_response = await self._execute_with_retries(model, request)
             except LookupError:
                 attempts.append(f"{model.key}:provider_unavailable")
                 last_error = RoutingError(
@@ -186,4 +194,143 @@ class Executor:
                 category=RoutingErrorCategory.UPSTREAM_ERROR,
                 message="all candidate models failed",
             ),
+        )
+
+    async def execute_stream(
+        self, decision: RoutingDecision, request: ProviderRequest
+    ) -> tuple[ExecutionResult, AsyncIterator[str] | None]:
+        """Stream text deltas, falling back on empty/invalid first-token buffers.
+
+        Buffers just enough of the first deltas to apply the same empty /
+        ``_looks_like_non_chat_output`` checks as ``execute`` before committing
+        to a model. Once committed, yields the buffered prefix then the rest.
+        """
+        if decision.selected_model is None:
+            return (
+                ExecutionResult(
+                    response=None,
+                    decision=decision,
+                    error=RoutingError(
+                        category=RoutingErrorCategory.NO_FEASIBLE_MODEL,
+                        message=decision.reason,
+                    ),
+                ),
+                None,
+            )
+
+        attempts: list[str] = []
+        last_error: RoutingError | None = None
+
+        for model in self._fallback_models(decision):
+            stream: AsyncIterator[str] | None = None
+            try:
+                stream = self._open_stream(model, request)
+            except LookupError:
+                attempts.append(f"{model.key}:provider_unavailable")
+                last_error = RoutingError(
+                    category=RoutingErrorCategory.PROVIDER_UNAVAILABLE,
+                    message=f"Provider {model.provider.value} is not configured",
+                )
+                continue
+            except Exception:
+                attempts.append(f"{model.key}:upstream_error")
+                last_error = RoutingError(
+                    category=RoutingErrorCategory.UPSTREAM_ERROR,
+                    message=client_safe_upstream_message(model.key),
+                    retryable=True,
+                )
+                continue
+
+            buffer: list[str] = []
+            accumulated = ""
+            stream_exhausted = False
+            rejected = False
+            upstream_error = False
+
+            try:
+                async for delta in stream:
+                    if delta:
+                        buffer.append(delta)
+                        accumulated += delta
+                    cleaned = _strip_reasoning_noise(accumulated.strip())
+                    if _looks_like_non_chat_output(cleaned):
+                        rejected = True
+                        break
+                    if cleaned:
+                        break
+                else:
+                    stream_exhausted = True
+            except Exception:
+                upstream_error = True
+                attempts.append(f"{model.key}:upstream_error")
+                last_error = RoutingError(
+                    category=RoutingErrorCategory.UPSTREAM_ERROR,
+                    message=client_safe_upstream_message(model.key),
+                    retryable=True,
+                )
+
+            if upstream_error:
+                if stream is not None:
+                    await stream.aclose()
+                continue
+
+            cleaned = _strip_reasoning_noise(accumulated.strip())
+            if rejected or not cleaned or _looks_like_non_chat_output(cleaned):
+                attempts.append(f"{model.key}:empty_or_invalid_response")
+                last_error = RoutingError(
+                    category=RoutingErrorCategory.PROVIDER_INVALID_RESPONSE,
+                    message=f"Empty/invalid response from {model.key}",
+                    retryable=True,
+                )
+                if stream is not None:
+                    await stream.aclose()
+                continue
+
+            # Commit: replay buffer, then remaining upstream deltas.
+            async def _committed_deltas(
+                prefix: list[str] = list(buffer),
+                rem: AsyncIterator[str] | None = stream,
+                exhausted: bool = stream_exhausted,
+            ) -> AsyncIterator[str]:
+                try:
+                    for piece in prefix:
+                        yield piece
+                    if not exhausted and rem is not None:
+                        async for delta in rem:
+                            if delta:
+                                yield delta
+                finally:
+                    if rem is not None:
+                        await rem.aclose()
+
+            placeholder = ProviderResponse(
+                text=cleaned,
+                usage_input_tokens=0,
+                usage_output_tokens=0,
+                latency_ms=0.0,
+                model=model.provider_model_id,
+                provider=model.provider,
+            )
+            return (
+                ExecutionResult(
+                    response=placeholder,
+                    decision=decision,
+                    fallback_attempts=attempts,
+                    used_model=model,
+                ),
+                _committed_deltas(),
+            )
+
+        return (
+            ExecutionResult(
+                response=None,
+                decision=decision,
+                fallback_attempts=attempts,
+                error=last_error
+                or RoutingError(
+                    category=RoutingErrorCategory.UPSTREAM_ERROR,
+                    message="all candidate models failed",
+                ),
+            ),
+            None,
         )

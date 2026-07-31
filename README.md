@@ -1,21 +1,24 @@
 # Dispatch
 
-Dispatch is a semantic LLM router with four core surfaces:
+Semantic LLM router with three surfaces:
 
-- FastAPI endpoints: `/route`, `/complete`
-- OpenAI-compatible proxy: `/v1/chat/completions`
-- Anthropic-compatible proxy: `/v1/messages`
-- MCP server tools: `health`, `ready`, `route`, `complete`, `refresh_models`
+1. **Chat demo** — `GET /` and `/demo` (`src/chat.html`)
+2. **Dashboard** — `GET /dashboard` (routing & generation events)
+3. **OpenAI/Anthropic-compatible HTTP** — `/v1/chat/completions`, `/v1/messages`, `/v1/models`
+4. **MCP server** — `dispatch-mcp` tools: `health`, `ready`, `route`, `complete`, `refresh_models`
 
-It keeps routing config-driven and safe:
+Native `/route` and `/complete` back the demo and MCP.
 
 ```text
-request -> classify -> policy constraints -> execute
+request → classify → policy constraints → execute
 ```
 
-- Classifier tiers: `cheap`, `mid`, `hard` from `configs/routes.yaml`
+- Tiers: `cheap` / `mid` / `hard` from `configs/routes.yaml`
 - Policy never violates hard constraints
-- Unmatched prompts fall back to `mid` (not silently to `cheap`)
+- Unmatched prompts fall back to `mid` (never silent `cheap`)
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline, passthrough vs execute, discovery, and limits.  
+See [integrations/README.md](integrations/README.md) for surface walkthroughs.
 
 ## Quick start
 
@@ -25,24 +28,54 @@ uv venv --python 3.11 .venv
 .\.venv\Scripts\Activate.ps1
 uv pip install -e ".[dev]"
 Copy-Item .env.example .env
+# Add GROQ_API_KEY and/or OPENROUTER_API_KEY; keep DISPATCH_PROFILE=demo
 uv run uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Optional for better routing quality:
+Optional (better routing quality):
 
 ```powershell
 uv pip install -e ".[embeddings]"
 ```
 
-## Chat demo UI
+## Chat demo
 
-With the API running, open:
+With the API running, open http://localhost:8000/demo
 
-http://localhost:8000/demo
+Do not open `src/chat.html` as `file://` — it must be served by the API.
 
-It talks to `/complete` and shows the routed tier / provider / model under each reply.
+After sending prompts, open http://localhost:8000/dashboard to inspect routing and generation (tier, model, latency, errors).
 
-## Verify core flow
+## MCP
+
+```powershell
+dispatch-mcp
+```
+
+Example client config: [integrations/mcp.json.example](integrations/mcp.json.example).
+
+## OpenAI-compatible API
+
+```powershell
+$env:DISPATCH_PROFILE = "demo"   # execute via Dispatch providers
+uv run uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+| Setting | Value |
+|---------|--------|
+| Base URL | `http://localhost:8000/v1` |
+| Model | `dispatch` |
+| API key | optional unless `ROUTER_API_KEY` is set |
+
+Passthrough: `DISPATCH_PROFILE=default` (OpenAI upstream) or `anthropic` (`POST /v1/messages`).
+
+```powershell
+curl.exe -X POST http://localhost:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{"model":"dispatch","messages":[{"role":"user","content":"summarize this in one sentence: hello"}]}'
+```
+
+## Verify routing
 
 ```powershell
 curl.exe -X POST http://localhost:8000/route `
@@ -54,41 +87,24 @@ curl.exe -X POST http://localhost:8000/complete `
   -d '{"prompt":"Summarize this in one sentence: Dispatch routes requests","max_output_tokens":120}'
 ```
 
-## Run MCP server
+## Config
 
-```powershell
-dispatch-mcp
-```
+| File | Purpose |
+|------|---------|
+| `configs/routes.yaml` | Classifier exemplars |
+| `configs/models.yaml` | Discovery + offline fallbacks |
+| `configs/clients.yaml` | Profiles: `demo`, `default`, `anthropic` |
+| `configs/router.yaml` | Thresholds, policy, retries, limits |
+| `.env` / `.env.example` | Keys, `DISPATCH_PROFILE`, rate limits |
 
-## Pass-through mode (use your upstream models)
-
-```powershell
-$env:DISPATCH_PROFILE = "default"   # OpenAI-compatible
-# or: claude-code (Anthropic protocol)
-uv run uvicorn src.api:app --host 0.0.0.0 --port 8000
-```
-
-Point tools to Dispatch:
-
-- OpenAI-compatible base URL: `http://localhost:8000/v1`
-- Model: `dispatch`
-- API key: your real upstream key (forwarded), unless using explicit `DISPATCH_UPSTREAM_API_KEY`
-
-## Config files
-
-- `configs/routes.yaml` — routing exemplars
-- `configs/models.yaml` — discovered/fallback model registry
-- `configs/clients.yaml` — profiles (`demo`, `default`, `claude-code`)
-- `configs/router.yaml` — thresholds, policy, retries, limits
-
-## API surface
+## Endpoints
 
 - `GET /` / `GET /demo` — chat UI
-- `GET /health`
-- `GET /ready`
+- `GET /dashboard` — routing & generation telemetry UI
+- `GET /telemetry/recent` — recent events JSON for the dashboard
+- `GET /health` · `GET /ready`
 - `POST /models/refresh`
-- `POST /route`
-- `POST /complete`
+- `POST /route` · `POST /complete`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/messages`
