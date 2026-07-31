@@ -30,6 +30,43 @@ Deeper pipeline: [ARCHITECTURE.md](ARCHITECTURE.md) · client setups: [integrati
 
 ---
 
+## Repository layout
+
+```text
+DISPATCH/
+├── configs/
+│   ├── routes.yaml      # cheap / mid / hard classifier exemplars
+│   ├── models.yaml      # discovery settings + offline fallbacks
+│   ├── clients.yaml     # profiles: demo, default, anthropic
+│   └── router.yaml      # thresholds, policy, retries, request limits
+├── integrations/
+│   ├── mcp.json.example # MCP client config snippet
+│   └── README.md        # surface walkthroughs
+├── src/
+│   ├── api.py           # FastAPI app: /route, /complete, UI, health
+│   ├── mcp_server.py    # MCP stdio tools (dispatch-mcp)
+│   ├── openai_compat.py # POST /v1/chat/completions
+│   ├── anthropic_compat.py  # POST /v1/messages
+│   ├── chat.html        # chat demo UI
+│   ├── dashboard.html   # telemetry dashboard
+│   └── router/
+│       ├── bootstrap.py     # build RoutingService at startup
+│       ├── classifier.py    # embed + score → cheap/mid/hard
+│       ├── policy.py        # constraints + model pick
+│       ├── executor.py      # call provider + fallbacks
+│       ├── service.py       # decide / complete orchestration
+│       ├── discover.py      # live Groq / OpenRouter catalogs
+│       ├── clients.py       # profile + passthrough model map
+│       ├── providers/       # groq, openrouter, openai, …
+│       └── …                # config, schemas, cache, telemetry, …
+├── ARCHITECTURE.md      # pipeline deep dive
+├── .env.example         # API keys + DISPATCH_PROFILE
+├── pyproject.toml       # package + dispatch-mcp entrypoint
+└── LICENSE
+```
+
+---
+
 ## Quick start
 
 ```bash
@@ -162,6 +199,61 @@ uv run pytest
 
 ---
 
+## Roadmap: toward [semantic-router](https://github.com/aurelio-labs/semantic-router) maturity
+
+[Aurelio Labs semantic-router](https://github.com/aurelio-labs/semantic-router) is the reference **library** for superfast semantic decisions (named routes, encoders, indexes, dynamic/tool routes). Dispatch is a **gateway**: classify → cheap/mid/hard → execute or passthrough, plus OpenAI/MCP surfaces.
+
+### Strengths (Dispatch today)
+
+| Strength | Why it matters |
+|----------|----------------|
+| **End-to-end gateway** | Not decide-only — classify, pick a model, call the provider (or forward upstream), return the answer |
+| **Cost-tier routing** | Built-in `cheap` / `mid` / `hard` with upgrade-only policy and mid fallback (never silent cheap) |
+| **OpenAI + Anthropic HTTP** | Drop-in ` /v1/chat/completions` and `/v1/messages` so existing SDKs and IDEs work without a custom client |
+| **MCP server** | `health` / `ready` / `route` / `complete` / `refresh_models` for Cursor and other agents |
+| **Execute + passthrough** | Demo mode runs Groq/OpenRouter for you; passthrough maps tiers onto *your* upstream model IDs |
+| **Live model discovery** | Pulls free-tier catalogs at startup; refresh without redeploying hardcoded lists |
+| **Provider fallbacks** | Retries across feasible models on timeouts/errors; streaming path for chat completions |
+| **Ops basics** | Auth (`ROUTER_API_KEY`), rate limits, request size caps, structured logs, `/health` + `/ready` |
+| **Visible telemetry** | Chat demo + dashboard show tier, model, latency, cache, errors — easy to debug routing live |
+| **YAML-first config** | Routes, models, clients, and limits are editable without touching Python |
+| **Free-tier friendly** | Defaults target Groq + OpenRouter free models for local demos |
+
+Where semantic-router wins today: arbitrary named routes, encoder ecosystem, hybrid/index backends, threshold training, multi-modal, and library/docs polish. Use the gaps below to close that distance **without** giving up the gateway strengths above.
+
+### Gaps to close
+
+#### Product & API
+| Gap | What to build |
+|-----|----------------|
+| **Library-first SDK** | `pip install dispatch` with a clean API (`Route`, `Router`, `encode`, `decide`) usable without running uvicorn |
+| **Arbitrary named routes** | Beyond fixed `cheap`/`mid`/`hard` — user-defined intents (`billing`, `code`, `refuse`, …) that can map to models, tools, or handlers |
+| **First-class abstain** | Optional `None` / no-match instead of always falling back to `mid` |
+| **Dynamic / tool routes** | Extract slot values and emit structured tool calls from the route layer (not only tier pick) |
+| **Save / load layers** | Serialize route utterances, embeddings, and thresholds to disk or object storage |
+
+#### Routing quality
+| Gap | What to build |
+|-----|----------------|
+| **Encoder plugins** | OpenAI, Cohere, FastEmbed, local GGUF — same interface; extras like `dispatch[openai]`, `dispatch[local]` |
+| **Hybrid scoring** | Dense embeddings + sparse/BM25 (or keyword) with tunable blend |
+| **Vector backends** | Local file today → optional Pinecone / Qdrant / Redis for large utterance sets and multi-process sync |
+| **Threshold optimization** | Fit per-route thresholds from labeled prompts; report precision/recall |
+| **Eval suite** | Public benchmark set (accuracy, latency p50/p99, cost) vs hand-labeled fixtures; CI gate |
+
+#### Surfaces & ecosystem
+| Gap | What to build |
+|-----|----------------|
+| **Multi-modal routes** | Image (and later audio) exemplars → route id |
+| **Agent frameworks** | Drop-in LangChain / LlamaIndex / OpenAI Agents adapters |
+| **Streaming-first UX** | SSE/WebSocket chat in the demo; token streaming as the default client path |
+| **Docs site + notebooks** | Hosted docs, intro notebooks, “local only”, “optimize thresholds”, “custom routes” |
+| **PyPI releases** | Semver tags, changelog, GitHub Actions publish; badge + install one-liner on the README |
+
+**Practical order:** (1) library API + named routes + abstain → (2) encoder extras + eval/threshold tuning → (3) hybrid + vector backends → (4) dynamic/tool routes → (5) docs/PyPI/multi-modal.
+
+---
+
 ## License
 
-See repository license / terms as published on GitHub.
+[MIT](LICENSE) © 2026 KhanUzeb
