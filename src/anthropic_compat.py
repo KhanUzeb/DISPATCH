@@ -45,7 +45,7 @@ class AnthropicMessage(BaseModel):
 class MessagesRequest(BaseModel):
     model: str = "dispatch"
     messages: list[AnthropicMessage] = Field(..., min_length=1)
-    max_tokens: int = 1024
+    max_tokens: int = 32768
     system: Any | None = None
     temperature: float | None = None
     stream: bool = False

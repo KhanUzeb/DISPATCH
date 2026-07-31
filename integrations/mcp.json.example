@@ -1,7 +1,8 @@
 {
   "mcpServers": {
     "dispatch": {
-      "command": "dispatch-mcp",
+      "command": "uv",
+      "args": ["run", "dispatch-mcp"],
       "env": {
         "DISPATCH_PROFILE": "demo"
       }

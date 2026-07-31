@@ -94,7 +94,7 @@ def _execute_svc(**methods) -> SimpleNamespace:
             upstream_api_key="",
             models={"cheap": "", "mid": "", "hard": ""},
         ),
-        "config": SimpleNamespace(request_max_prompt_chars=1000, request_max_output_tokens=4096),
+        "config": SimpleNamespace(request_max_prompt_chars=1000, request_max_output_tokens=131072),
         "decide": lambda *a, **k: _route_response(),
         "complete": AsyncMock(),
         "model_registry": SimpleNamespace(

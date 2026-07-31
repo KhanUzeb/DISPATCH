@@ -25,7 +25,7 @@ Shows recent routing & generation events: tier, route confidence, provider/model
 ## 2. MCP server
 
 ```powershell
-dispatch-mcp
+uv run dispatch-mcp
 ```
 
 Tools: `health`, `ready`, `route`, `complete`, `refresh_models`.
@@ -36,7 +36,8 @@ Example MCP client config (stdio) — also in `integrations/mcp.json.example`:
 {
   "mcpServers": {
     "dispatch": {
-      "command": "dispatch-mcp",
+      "command": "uv",
+      "args": ["run", "dispatch-mcp"],
       "env": {
         "DISPATCH_PROFILE": "demo"
       }

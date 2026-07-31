@@ -119,7 +119,7 @@ class ProviderRequest:
     prompt: str
     messages: list[dict[str, str]]
     temperature: float = 0.0
-    max_output_tokens: int = 1024
+    max_output_tokens: int = 32768
     structured_output: bool = False
     tool_calling: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)

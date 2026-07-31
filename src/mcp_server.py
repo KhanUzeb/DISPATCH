@@ -169,7 +169,7 @@ def route(
 @mcp.tool()
 def complete(
     prompt: str,
-    max_output_tokens: int = 512,
+    max_output_tokens: int = 32768,
     max_cost_usd: float | None = None,
     max_latency_ms: float | None = None,
     min_context_window: int | None = None,

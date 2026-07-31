@@ -53,6 +53,8 @@ telemetry:
   mode: logging
 
 request_limits:
-  max_prompt_chars: 50000
-  # Headroom for OpenAI/Anthropic-compatible /v1 clients.
-  max_output_tokens: 128000
+  # ~50k tokens of input headroom (chars ≈ 4× tokens for English).
+  max_prompt_chars: 200000
+  # Match Groq max completion (8B/instant up to 131072; 70B caps at 32768).
+  # OpenRouter is per-model; this is the router accept ceiling.
+  max_output_tokens: 131072

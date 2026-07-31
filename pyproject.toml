@@ -1,7 +1,7 @@
 [project]
 name = "dispatch"
 version = "0.1.0"
-description = "Dispatch — semantic LLM router (chat demo, MCP, OpenAI/Anthropic-compatible HTTP)"
+description = "Semantic LLM router: cheap/mid/hard routing to Groq & OpenRouter, with OpenAI/Anthropic-compatible HTTP, MCP, and chat demo"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",

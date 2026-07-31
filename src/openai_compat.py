@@ -294,7 +294,7 @@ def register_openai_routes(
         elif req.max_completion_tokens is not None:
             max_tokens = req.max_completion_tokens
         else:
-            max_tokens = 1024
+            max_tokens = 32768
         if max_tokens <= 0:
             return openai_error("max_tokens must be > 0", status=400)
         if max_tokens > svc.config.request_max_output_tokens:

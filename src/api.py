@@ -48,7 +48,7 @@ class CompleteRequest(BaseModel):
     max_cost_usd: float | None = Field(default=None, gt=0)
     max_latency_ms: float | None = Field(default=None, gt=0)
     min_context_window: int | None = Field(default=None, gt=0)
-    max_output_tokens: int = Field(default=512, gt=0)
+    max_output_tokens: int = Field(default=32768, gt=0)
     expects_structured_output: bool = False
     require_tool_calling: bool = False
     include_diagnostics: bool = False
