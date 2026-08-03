@@ -6,12 +6,14 @@ import httpx
 
 from .base import ProviderAdapter
 from ..schemas import Provider, ProviderRequest, ProviderResponse
+from ..http_client import get_http_client
 
 
 class OpenRouterAdapter(ProviderAdapter):
-    def __init__(self, api_key: str | None, timeout_ms: int = 30000) -> None:
+    def __init__(self, api_key: str | None, timeout_ms: int = 30000, client: httpx.AsyncClient | None = None) -> None:
         self.api_key = api_key
         self.timeout_ms = timeout_ms
+        self.client = client
 
     @property
     def provider_name(self) -> str:
@@ -22,20 +24,21 @@ class OpenRouterAdapter(ProviderAdapter):
             raise RuntimeError("Missing OPENROUTER_API_KEY")
 
         start = time.perf_counter()
-        async with httpx.AsyncClient(timeout=self.timeout_ms / 1000.0) as client:
-            response = await client.post(
+        client = self.client or get_http_client()
+        response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
+                timeout=self.timeout_ms / 1000.0,
                 json={
                     "model": model_id,
                     "messages": request.messages,
                     "temperature": request.temperature,
                     "max_tokens": request.max_output_tokens,
                 },
-            )
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         response.raise_for_status()
         data = response.json()

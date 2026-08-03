@@ -6,15 +6,17 @@ import httpx
 
 from ..schemas import Provider, ProviderRequest, ProviderResponse
 from .base import ProviderAdapter
+from ..http_client import get_http_client
 
 
 class GoogleAdapter(ProviderAdapter):
     """Google Gemini generateContent API adapter."""
 
-    def __init__(self, api_key: str | None, timeout_ms: int = 30000) -> None:
+    def __init__(self, api_key: str | None, timeout_ms: int = 30000, client: httpx.AsyncClient | None = None) -> None:
         self.api_key = api_key
         self.timeout_ms = timeout_ms
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+        self.client = client
 
     @property
     def provider_name(self) -> str:
@@ -33,8 +35,8 @@ class GoogleAdapter(ProviderAdapter):
 
         url = f"{self.base_url}/models/{model_id}:generateContent"
         start = time.perf_counter()
-        async with httpx.AsyncClient(timeout=self.timeout_ms / 1000.0) as client:
-            response = await client.post(
+        client = self.client or get_http_client()
+        response = await client.post(
                 url,
                 params={"key": self.api_key},
                 headers={"Content-Type": "application/json"},
@@ -45,7 +47,8 @@ class GoogleAdapter(ProviderAdapter):
                         "maxOutputTokens": request.max_output_tokens,
                     },
                 },
-            )
+                timeout=self.timeout_ms / 1000.0,
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         if response.status_code == 401:
             raise RuntimeError("google authentication failed")

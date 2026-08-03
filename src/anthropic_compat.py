@@ -30,6 +30,7 @@ from .router.passthrough import (
 from .router.security import require_router_auth, router_api_key, router_api_key_configured
 from .router.service import RoutingService
 from .router.telemetry import RoutingTelemetryEvent
+from .router.tokens import estimate_input_tokens
 
 
 anthropic_router = APIRouter(prefix="/v1", tags=["anthropic-compatible"])
@@ -221,7 +222,7 @@ def register_anthropic_routes(*, get_service, emit_telemetry) -> APIRouter:
                 total_latency_ms=total_latency,
                 estimated_cost_usd=None,
                 actual_cost_usd=None,
-                input_tokens=max(1, len(prompt) // 4),
+                input_tokens=estimate_input_tokens(prompt),
                 output_tokens=0,
                 fallback_attempts=0,
                 error_category=None if result.status_code < 400 else "upstream_error",

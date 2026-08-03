@@ -94,9 +94,19 @@ Better routing quality (real embeddings):
 uv pip install -e ".[embeddings]"
 ```
 
+MCP is optional. Install it only when you need the stdio server:
+
+```bash
+uv pip install -e ".[dev,mcp]"
+```
+
 ---
 
 ## MCP
+
+The HTTP API and routing library do not require the MCP package. Install the
+`mcp` extra before running `dispatch-mcp`; without it, unrelated imports and
+tests remain available and `dispatch-mcp` reports a clear startup error.
 
 ```bash
 uv run dispatch-mcp
@@ -196,6 +206,14 @@ Defaults allow large completions (up to Groq-style caps) and long prompts — se
 ```bash
 uv run pytest
 ```
+
+The router reuses one HTTP client per application lifecycle so provider
+connections can be pooled. `max_fallbacks` means the number of additional
+models tried after the initially selected model. Routing cache entries include
+structured-output, optimization, and provider/model constraint inputs, so
+changing those options cannot reuse a stale decision. For streamed provider
+responses, usage is reported when the provider sends usage metadata; otherwise
+the response marks usage as unavailable rather than treating it as zero.
 
 ---
 

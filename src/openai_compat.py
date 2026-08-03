@@ -31,6 +31,7 @@ from .router.schemas import RoutingConstraints
 from .router.security import require_router_auth, verify_router_api_key
 from .router.service import RoutingService
 from .router.telemetry import RoutingTelemetryEvent
+from .router.tokens import estimate_input_tokens
 
 
 openai_router = APIRouter(prefix="/v1", tags=["openai-compatible"])
@@ -415,7 +416,7 @@ async def _passthrough_chat(
             total_latency_ms=total_latency,
             estimated_cost_usd=None,
             actual_cost_usd=None,
-            input_tokens=max(1, len(prompt) // 4),
+            input_tokens=estimate_input_tokens(prompt),
             output_tokens=0,
             fallback_attempts=0,
             error_category=None if result.status_code < 400 else "upstream_error",
@@ -532,7 +533,7 @@ async def _execute_chat(*, svc: RoutingService, req: ChatCompletionsRequest, pro
                 total_latency_ms=total_latency,
                 estimated_cost_usd=None,
                 actual_cost_usd=None,
-                input_tokens=max(1, len(prompt) // 4),
+                input_tokens=estimate_input_tokens(prompt),
                 output_tokens=0,
                 fallback_attempts=len(execution.fallback_attempts),
                 error_category=execution.error.category.value,
