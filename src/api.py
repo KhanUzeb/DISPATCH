@@ -39,6 +39,7 @@ from .router.telemetry import (
     NoopTelemetry,
     RoutingTelemetryEvent,
 )
+from .router.tokens import estimate_input_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +319,7 @@ async def route_only(req: CompleteRequest, _: None = Depends(require_router_auth
                 total_latency_ms=total_latency,
                 estimated_cost_usd=None,
                 actual_cost_usd=None,
-                input_tokens=max(1, len(req.prompt) // 4),
+                input_tokens=estimate_input_tokens(req.prompt),
                 output_tokens=0,
                 fallback_attempts=0,
                 error_category=None,
@@ -376,7 +377,7 @@ async def route_only(req: CompleteRequest, _: None = Depends(require_router_auth
                 None,
             ),
             actual_cost_usd=None,
-            input_tokens=max(1, len(req.prompt) // 4),
+            input_tokens=estimate_input_tokens(req.prompt),
             output_tokens=0,
             fallback_attempts=0,
             error_category=decision.error_category.value if decision.error_category else None,
@@ -456,7 +457,7 @@ async def complete(req: CompleteRequest, _: None = Depends(require_router_auth))
                 total_latency_ms=total_latency,
                 estimated_cost_usd=None,
                 actual_cost_usd=None,
-                input_tokens=max(1, len(req.prompt) // 4),
+                input_tokens=estimate_input_tokens(req.prompt),
                 output_tokens=0,
                 fallback_attempts=len(execution.fallback_attempts),
                 error_category=execution.error.category.value,

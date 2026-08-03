@@ -18,6 +18,9 @@ class DecisionCacheKey:
     route_version: str
     encoder_id: str
     policy_version: str
+    # Inputs that affect classification or policy selection must be represented
+    # here; otherwise a cached decision can be reused for a different request.
+    expects_structured_output: bool = False
 
     def to_hash(self) -> str:
         payload = {
@@ -27,6 +30,7 @@ class DecisionCacheKey:
             "route_version": self.route_version,
             "encoder_id": self.encoder_id,
             "policy_version": self.policy_version,
+            "expects_structured_output": self.expects_structured_output,
         }
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()

@@ -16,6 +16,7 @@ from .logging_config import set_request_id
 from .models import ModelRegistry
 from .policy import route
 from .schemas import ClassificationResult, ProviderRequest, RoutingConstraints, RoutingDecision, Tier
+from .tokens import estimate_input_tokens
 
 
 @dataclass
@@ -62,7 +63,7 @@ class RoutingService:
         return self.client_config.active()
 
     def _input_tokens(self, prompt: str) -> int:
-        return max(1, len(prompt) // 4)
+        return estimate_input_tokens(prompt)
 
     def decide(self, prompt: str, constraints: RoutingConstraints, expects_structured_output: bool) -> RouteResponse:
         request_id = str(uuid.uuid4())
@@ -77,10 +78,15 @@ class RoutingService:
                 "estimated_output_tokens": constraints.estimated_output_tokens,
                 "require_structured_output": constraints.require_structured_output,
                 "require_tool_calling": constraints.require_tool_calling,
+                "allow_providers": sorted(p.value for p in (constraints.allow_providers or [])),
+                "deny_providers": sorted(p.value for p in (constraints.deny_providers or [])),
+                "explicit_model_allowlist": sorted(constraints.explicit_model_allowlist or []),
+                "optimization_objective": constraints.optimization_objective,
             },
             route_version=self.classifier.route_store.version,
             encoder_id=self.classifier.encoder.identity,
             policy_version=self.config.policy_version,
+            expects_structured_output=expects_structured_output,
         )
 
         cached = self.decision_cache.get(key)

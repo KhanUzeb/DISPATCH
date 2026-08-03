@@ -61,7 +61,7 @@ async def build_routing_service(
             aggregation=cfg.route_aggregation,
         )
         classifier.initialize()
-        providers = build_provider_registry(timeouts_ms=cfg.provider_timeouts_ms)
+        providers = build_provider_registry(timeouts_ms=cfg.provider_timeouts_ms, client=http_client)
         service = RoutingService(
             classifier,
             Executor(

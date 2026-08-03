@@ -9,7 +9,10 @@ import asyncio
 from dataclasses import asdict
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+try:  # MCP is optional for HTTP API and library imports.
+    from mcp.server.mcpserver import MCPServer
+except ImportError:  # pragma: no cover - import-isolation regression test
+    MCPServer = None  # type: ignore[assignment,misc]
 
 from .router.bootstrap import build_routing_service
 from .router.http_client import aclose_http_client, create_http_client, get_http_client, set_http_client
@@ -18,7 +21,11 @@ from .router.schemas import RoutingConstraints, Tier
 from .router.service import RoutingService
 from .router.surface import RequestLimitError, ready_payload, validate_request_limits
 
-mcp = MCPServer("dispatch-router")
+mcp = MCPServer("dispatch-router") if MCPServer is not None else None
+
+
+def _tool():
+    return mcp.tool() if mcp is not None else (lambda function: function)
 
 _service: RoutingService | None = None
 _startup_error: str | None = None
@@ -61,7 +68,7 @@ def _tool_error(message: str, *, category: str = "invalid_request") -> dict[str,
     return {"error": {"category": category, "message": message, "retryable": False}}
 
 
-@mcp.tool()
+@_tool()
 def health() -> dict[str, Any]:
     """Return router process health and active mode."""
     _ensure_service()
@@ -80,7 +87,7 @@ def health() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@_tool()
 def ready() -> dict[str, Any]:
     """Return initialization and model readiness details."""
     _ensure_service()
@@ -89,7 +96,7 @@ def ready() -> dict[str, Any]:
     return _run(ready_payload(_service, client=get_http_client()))
 
 
-@mcp.tool()
+@_tool()
 def route(
     prompt: str,
     max_cost_usd: float | None = None,
@@ -166,7 +173,7 @@ def route(
     return payload
 
 
-@mcp.tool()
+@_tool()
 def complete(
     prompt: str,
     max_output_tokens: int = 32768,
@@ -257,7 +264,7 @@ def complete(
     }
 
 
-@mcp.tool()
+@_tool()
 def refresh_models() -> dict[str, Any]:
     """Refresh live model catalogs and return updated tier mappings."""
     try:
@@ -280,6 +287,8 @@ def refresh_models() -> dict[str, Any]:
 
 
 def main() -> None:
+    if mcp is None:
+        raise SystemExit("dispatch-mcp requires the optional 'mcp' package")
     _ensure_service()
     if _service is None:
         raise SystemExit(f"dispatch-mcp failed to start: {_startup_error}")
@@ -291,4 +300,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

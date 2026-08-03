@@ -8,6 +8,8 @@ import httpx
 
 from ..schemas import Provider, ProviderRequest, ProviderResponse
 from .base import ProviderAdapter
+from .base import ProviderStreamChunk
+from ..http_client import get_http_client
 
 
 def _parse_sse_data_line(line: str) -> str | None:
@@ -48,6 +50,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         timeout_ms: int = 30000,
         extra_headers: dict[str, str] | None = None,
         require_api_key: bool = True,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self.provider = provider
         self.api_key = api_key
@@ -55,6 +58,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         self.timeout_ms = timeout_ms
         self.extra_headers = extra_headers or {}
         self.require_api_key = require_api_key
+        self.client = client
 
     @property
     def provider_name(self) -> str:
@@ -92,12 +96,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     async def execute(self, model_id: str, request: ProviderRequest) -> ProviderResponse:
         headers = self._headers()
         start = time.perf_counter()
-        async with httpx.AsyncClient(timeout=self.timeout_ms / 1000.0) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=self._chat_payload(model_id, request, stream=False),
-            )
+        client = self.client or get_http_client()
+        response = await client.post(
+            f"{self.base_url}/chat/completions",
+            headers=headers,
+            json=self._chat_payload(model_id, request, stream=False),
+            timeout=self.timeout_ms / 1000.0,
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         self._raise_for_status(response)
         data = response.json()
@@ -114,24 +119,35 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         )
 
     async def stream(self, model_id: str, request: ProviderRequest) -> AsyncIterator[str]:
+        async for chunk in self.stream_with_usage(model_id, request):
+            if chunk.text:
+                yield chunk.text
+
+    async def stream_with_usage(self, model_id: str, request: ProviderRequest) -> AsyncIterator[ProviderStreamChunk]:
         headers = self._headers()
-        timeout = self.timeout_ms / 1000.0
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
+        client = self.client or get_http_client()
+        async with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
                 headers=headers,
-                json=self._chat_payload(model_id, request, stream=True),
-            ) as response:
-                self._raise_for_status(response)
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    payload = _parse_sse_data_line(line)
-                    if payload is None:
-                        continue
-                    text = _delta_text_from_chunk(payload)
-                    if text is None:
-                        break
-                    if text:
-                        yield text
+                json={**self._chat_payload(model_id, request, stream=True), "stream_options": {"include_usage": True}},
+                timeout=self.timeout_ms / 1000.0,
+        ) as response:
+            self._raise_for_status(response)
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                payload = _parse_sse_data_line(line)
+                if payload is None or payload == "[DONE]":
+                    continue
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                usage = data.get("usage") or {}
+                text = _delta_text_from_chunk(payload) or ""
+                yield ProviderStreamChunk(
+                    text=text,
+                    usage_input_tokens=int(usage["prompt_tokens"]) if "prompt_tokens" in usage else None,
+                    usage_output_tokens=int(usage["completion_tokens"]) if "completion_tokens" in usage else None,
+                )

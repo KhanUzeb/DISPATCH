@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import httpx
 
 from ..schemas import Provider
 from .anthropic import AnthropicAdapter
@@ -63,7 +64,10 @@ def _timeout(timeouts_ms: dict[str, int], provider: Provider) -> int:
     return int(timeouts_ms.get(provider.value, DEFAULT_TIMEOUT_MS))
 
 
-def build_provider_registry(timeouts_ms: dict[str, int] | None = None) -> ProviderRegistry:
+def build_provider_registry(
+    timeouts_ms: dict[str, int] | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> ProviderRegistry:
     timeouts = timeouts_ms or {}
     providers = {
         Provider.GROQ: GroqAdapter(
@@ -73,14 +77,17 @@ def build_provider_registry(timeouts_ms: dict[str, int] | None = None) -> Provid
         Provider.OPENROUTER: OpenRouterAdapter(
             api_key=os.environ.get("OPENROUTER_API_KEY"),
             timeout_ms=_timeout(timeouts, Provider.OPENROUTER),
+            client=client,
         ),
         Provider.ANTHROPIC: AnthropicAdapter(
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
             timeout_ms=_timeout(timeouts, Provider.ANTHROPIC),
+            client=client,
         ),
         Provider.GOOGLE: GoogleAdapter(
             api_key=os.environ.get("GOOGLE_API_KEY"),
             timeout_ms=_timeout(timeouts, Provider.GOOGLE),
+            client=client,
         ),
     }
 
@@ -91,6 +98,7 @@ def build_provider_registry(timeouts_ms: dict[str, int] | None = None) -> Provid
             base_url=os.environ.get(str(meta["base_url_env"]), str(meta["default_base_url"])),
             timeout_ms=_timeout(timeouts, provider),
             require_api_key=bool(meta["require_api_key"]),
+            client=client,
         )
 
     return ProviderRegistry(providers=providers)

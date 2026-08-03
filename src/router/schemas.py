@@ -137,6 +137,7 @@ class ProviderResponse:
     retryable: bool = False
     rate_limited: bool = False
     upstream_error_category: str | None = None
+    usage_available: bool = True
 
 
 @dataclass(frozen=True)

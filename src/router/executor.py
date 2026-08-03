@@ -48,6 +48,9 @@ class ExecutionResult:
     error: RoutingError | None = None
     actual_cost_usd: float | None = None
     used_model: ModelSpec | None = None
+    # Streaming providers may report usage only in a terminal event. This is
+    # populated as the returned delta iterator is consumed.
+    stream_usage: dict[str, int] | None = None
 
 
 class Executor:
@@ -66,6 +69,7 @@ class Executor:
         if selected is None:
             return []
         ordered: list[ModelSpec] = [selected]
+        # max_fallbacks is the number of models allowed after the primary.
         # Prefer other same-tier feasible models, then any remaining feasible.
         # Within each group, prefer lower avg latency (Groq before OpenRouter free).
         same_tier = sorted(
@@ -84,11 +88,12 @@ class Executor:
             ],
             key=lambda m: (m.avg_latency_ms, m.key),
         )
+        limit = 1 + max(0, self.max_fallbacks)
         for model in same_tier + other:
+            if len(ordered) >= limit:
+                break
             if model.key not in {m.key for m in ordered}:
                 ordered.append(model)
-            if len(ordered) > self.max_fallbacks:
-                break
         return ordered
 
     def _get_adapter(self, model: ModelSpec):
@@ -115,7 +120,13 @@ class Executor:
         raise last_exc
 
     def _open_stream(self, model: ModelSpec, request: ProviderRequest) -> AsyncIterator[str]:
-        return self._get_adapter(model).stream(model.provider_model_id, request)
+        adapter = self._get_adapter(model)
+        stream_with_usage = getattr(adapter, "stream_with_usage", None)
+        if stream_with_usage is not None:
+            return stream_with_usage(model.provider_model_id, request)
+        # Preserve compatibility with lightweight/custom adapters that only
+        # implement the original stream() method.
+        return adapter.stream(model.provider_model_id, request)
 
     async def execute(self, decision: RoutingDecision, request: ProviderRequest) -> ExecutionResult:
         if decision.selected_model is None:
@@ -222,7 +233,7 @@ class Executor:
         last_error: RoutingError | None = None
 
         for model in self._fallback_models(decision):
-            stream: AsyncIterator[str] | None = None
+            stream: AsyncIterator | None = None
             try:
                 stream = self._open_stream(model, request)
             except LookupError:
@@ -246,9 +257,15 @@ class Executor:
             stream_exhausted = False
             rejected = False
             upstream_error = False
+            stream_usage: dict[str, int] = {}
 
             try:
-                async for delta in stream:
+                async for chunk in stream:
+                    delta = getattr(chunk, "text", chunk)
+                    if getattr(chunk, "usage_input_tokens", None) is not None:
+                        stream_usage["input_tokens"] = chunk.usage_input_tokens
+                    if getattr(chunk, "usage_output_tokens", None) is not None:
+                        stream_usage["output_tokens"] = chunk.usage_output_tokens
                     if delta:
                         buffer.append(delta)
                         accumulated += delta
@@ -289,14 +306,19 @@ class Executor:
             # Commit: replay buffer, then remaining upstream deltas.
             async def _committed_deltas(
                 prefix: list[str] = list(buffer),
-                rem: AsyncIterator[str] | None = stream,
+                rem: AsyncIterator | None = stream,
                 exhausted: bool = stream_exhausted,
             ) -> AsyncIterator[str]:
                 try:
                     for piece in prefix:
                         yield piece
                     if not exhausted and rem is not None:
-                        async for delta in rem:
+                        async for chunk in rem:
+                            delta = getattr(chunk, "text", chunk)
+                            if getattr(chunk, "usage_input_tokens", None) is not None:
+                                stream_usage["input_tokens"] = chunk.usage_input_tokens
+                            if getattr(chunk, "usage_output_tokens", None) is not None:
+                                stream_usage["output_tokens"] = chunk.usage_output_tokens
                             if delta:
                                 yield delta
                 finally:
@@ -310,6 +332,7 @@ class Executor:
                 latency_ms=0.0,
                 model=model.provider_model_id,
                 provider=model.provider,
+                usage_available=bool(stream_usage),
             )
             return (
                 ExecutionResult(
@@ -317,6 +340,7 @@ class Executor:
                     decision=decision,
                     fallback_attempts=attempts,
                     used_model=model,
+                    stream_usage=stream_usage,
                 ),
                 _committed_deltas(),
             )
