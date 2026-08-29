@@ -10,7 +10,7 @@ Requires `.env` with `GROQ_API_KEY` and/or `OPENROUTER_API_KEY`, and `DISPATCH_P
 uv run uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Open **http://localhost:8000/demo** (or `/`). Served from `src/chat.html` — do not open it as `file://`.
+Open **http://localhost:8000/demo** (or `/`). Served from `src/chat.html`; do not open it as `file://`.
 
 - Status should show `execute · demo`
 - Each reply shows tier / provider / model / latency
@@ -30,7 +30,7 @@ uv run dispatch-mcp
 
 Tools: `health`, `ready`, `route`, `complete`, `refresh_models`.
 
-Example MCP client config (stdio) — also in `integrations/mcp.json.example`:
+Example MCP client config (stdio), also in `integrations/mcp.json.example`:
 
 ```json
 {
