@@ -15,10 +15,10 @@ prompt
 
 Shared infrastructure:
 
-- `bootstrap.build_routing_service` — config, routes, model registry, clients
-- `http_client` — one process-wide `httpx.AsyncClient`
-- `surface` — request limits + `/ready` payload
-- `logging_config` — text or JSON logs (`ROUTER_LOG_*`)
+- `bootstrap.build_routing_service`: config, routes, model registry, clients
+- `http_client`: one process-wide `httpx.AsyncClient`
+- `surface`: request limits + `/ready` payload
+- `logging_config`: text or JSON logs (`ROUTER_LOG_*`)
 
 ### Classify (`classifier.py`)
 
@@ -56,8 +56,8 @@ Passthrough uses `RoutingService.decide_for_client()` (no `policy.route` over Di
 
 ### Proxies
 
-- **`openai_compat.py`** (`POST /v1/chat/completions`) — execute or passthrough
-- **`anthropic_compat.py`** (`POST /v1/messages`) — passthrough only when profile `protocol` is `anthropic`
+- **`openai_compat.py`** (`POST /v1/chat/completions`): execute or passthrough
+- **`anthropic_compat.py`** (`POST /v1/messages`): passthrough only when profile `protocol` is `anthropic`
 
 MCP `complete` is execute-only; passthrough profiles must use the HTTP proxies.
 
@@ -76,13 +76,13 @@ Passthrough profiles with empty `models` use the same heuristics against the ups
 
 For local demo / MCP / API use:
 
-- `ROUTER_API_KEY` — Bearer auth on `/route`, `/complete`, `/v1/*`, `/models/refresh`
-- `ROUTER_RATE_LIMIT_PER_MINUTE` — process-local sliding window per client IP
-- `ROUTER_MAX_REQUEST_BYTES` — reject oversized bodies before parse
-- `request_limits` in `configs/router.yaml` — max prompt chars / output tokens
+- `ROUTER_API_KEY`: Bearer auth on `/route`, `/complete`, `/v1/*`, `/models/refresh`
+- `ROUTER_RATE_LIMIT_PER_MINUTE`: process-local sliding window per client IP
+- `ROUTER_MAX_REQUEST_BYTES`: reject oversized bodies before parse
+- `request_limits` in `configs/router.yaml`: max prompt chars / output tokens
 
 ## Known limitations
 
 - Decision cache and rate limiter are process-local (no multi-worker sharing).
-- Telemetry: optional Langfuse and/or logging, plus an in-memory ring — no durable built-in sink.
+- Telemetry: optional Langfuse and/or logging, plus an in-memory ring. No durable built-in sink.
 - One shared HTTP client per process; do not construct inline `httpx` clients on hot paths.

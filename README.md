@@ -1,6 +1,6 @@
 # Dispatch
 
-**Semantic LLM router** — classify each prompt into `cheap` / `mid` / `hard`, then send it to the right model on **Groq**, **OpenRouter**, or your own upstream.
+**Semantic LLM router**: classify each prompt into `cheap` / `mid` / `hard`, then send it to the right model on **Groq**, **OpenRouter**, or your own upstream.
 
 OpenAI- and Anthropic-compatible HTTP · MCP server · local chat demo & dashboard.
 
@@ -11,7 +11,7 @@ prompt → classify → policy → execute (or passthrough)
 | Surface | What you get |
 |---------|----------------|
 | **HTTP** | `POST /v1/chat/completions`, `POST /v1/messages`, `/route`, `/complete` |
-| **MCP** | `dispatch-mcp` — `health`, `ready`, `route`, `complete`, `refresh_models` |
+| **MCP** | `dispatch-mcp`: `health`, `ready`, `route`, `complete`, `refresh_models` |
 | **UI** | Chat at `/demo`, telemetry at `/dashboard` |
 
 Unmatched prompts fall back to **mid** (never silent cheap). Policy upgrades tiers only; it never downgrades under hard constraints.
@@ -22,11 +22,11 @@ Deeper pipeline: [ARCHITECTURE.md](ARCHITECTURE.md) · client setups: [integrati
 
 ## Why Dispatch
 
-- **Cost-aware routing** — short/simple work stays on cheap models; design & reasoning go to hard
-- **Drop-in API** — point any OpenAI SDK at `http://localhost:8000/v1` with model `dispatch`
-- **Live discovery** — pulls free-tier catalogs from Groq + OpenRouter at startup
-- **Two modes** — **execute** (Dispatch calls providers) or **passthrough** (map tier → your upstream IDs)
-- **Agent-ready** — MCP stdio tools for Cursor and other MCP clients
+- **Cost-aware routing**: short/simple work stays on cheap models; design & reasoning go to hard
+- **Drop-in API**: point any OpenAI SDK at `http://localhost:8000/v1` with model `dispatch`
+- **Live discovery**: pulls free-tier catalogs from Groq + OpenRouter at startup
+- **Two modes**: **execute** (Dispatch calls providers) or **passthrough** (map tier → your upstream IDs)
+- **Agent-ready**: MCP stdio tools for Cursor and other MCP clients
 
 ---
 
@@ -181,7 +181,7 @@ curl -X POST http://localhost:8000/complete \
 | `configs/router.yaml` | Thresholds, policy, retries, request limits |
 | `.env` | API keys, `DISPATCH_PROFILE`, rate limits |
 
-Defaults allow large completions (up to Groq-style caps) and long prompts — see `request_limits` in `configs/router.yaml`.
+Defaults allow large completions (up to Groq-style caps) and long prompts. See `request_limits` in `configs/router.yaml`.
 
 ---
 
@@ -225,7 +225,7 @@ the response marks usage as unavailable rather than treating it as zero.
 
 | Strength | Why it matters |
 |----------|----------------|
-| **End-to-end gateway** | Not decide-only — classify, pick a model, call the provider (or forward upstream), return the answer |
+| **End-to-end gateway** | Not decide-only: classify, pick a model, call the provider (or forward upstream), return the answer |
 | **Cost-tier routing** | Built-in `cheap` / `mid` / `hard` with upgrade-only policy and mid fallback (never silent cheap) |
 | **OpenAI + Anthropic HTTP** | Drop-in ` /v1/chat/completions` and `/v1/messages` so existing SDKs and IDEs work without a custom client |
 | **MCP server** | `health` / `ready` / `route` / `complete` / `refresh_models` for Cursor and other agents |
@@ -233,7 +233,7 @@ the response marks usage as unavailable rather than treating it as zero.
 | **Live model discovery** | Pulls free-tier catalogs at startup; refresh without redeploying hardcoded lists |
 | **Provider fallbacks** | Retries across feasible models on timeouts/errors; streaming path for chat completions |
 | **Ops basics** | Auth (`ROUTER_API_KEY`), rate limits, request size caps, structured logs, `/health` + `/ready` |
-| **Visible telemetry** | Chat demo + dashboard show tier, model, latency, cache, errors — easy to debug routing live |
+| **Visible telemetry** | Chat demo + dashboard show tier, model, latency, cache, and errors, so you can debug routing live |
 | **YAML-first config** | Routes, models, clients, and limits are editable without touching Python |
 | **Free-tier friendly** | Defaults target Groq + OpenRouter free models for local demos |
 
@@ -245,7 +245,7 @@ Where semantic-router wins today: arbitrary named routes, encoder ecosystem, hyb
 | Gap | What to build |
 |-----|----------------|
 | **Library-first SDK** | `pip install dispatch` with a clean API (`Route`, `Router`, `encode`, `decide`) usable without running uvicorn |
-| **Arbitrary named routes** | Beyond fixed `cheap`/`mid`/`hard` — user-defined intents (`billing`, `code`, `refuse`, …) that can map to models, tools, or handlers |
+| **Arbitrary named routes** | Beyond fixed `cheap`/`mid`/`hard`: user-defined intents (`billing`, `code`, `refuse`, …) that can map to models, tools, or handlers |
 | **First-class abstain** | Optional `None` / no-match instead of always falling back to `mid` |
 | **Dynamic / tool routes** | Extract slot values and emit structured tool calls from the route layer (not only tier pick) |
 | **Save / load layers** | Serialize route utterances, embeddings, and thresholds to disk or object storage |
@@ -253,7 +253,7 @@ Where semantic-router wins today: arbitrary named routes, encoder ecosystem, hyb
 #### Routing quality
 | Gap | What to build |
 |-----|----------------|
-| **Encoder plugins** | OpenAI, Cohere, FastEmbed, local GGUF — same interface; extras like `dispatch[openai]`, `dispatch[local]` |
+| **Encoder plugins** | OpenAI, Cohere, FastEmbed, local GGUF. Same interface; extras like `dispatch[openai]`, `dispatch[local]` |
 | **Hybrid scoring** | Dense embeddings + sparse/BM25 (or keyword) with tunable blend |
 | **Vector backends** | Local file today → optional Pinecone / Qdrant / Redis for large utterance sets and multi-process sync |
 | **Threshold optimization** | Fit per-route thresholds from labeled prompts; report precision/recall |
